@@ -38,6 +38,8 @@ export const HOSTED = !!process.env.VERCEL || process.env.LOOSELEAF_HOSTED === "
 function appToken(): string {
   const env = process.env.PUBLIK_APP_TOKEN?.trim();
   if (env) return env;
+  const inlined = process.env.LOOSELEAF_APP_TOKEN?.trim(); // publik-app-token.txt, read at build time (next.config.ts)
+  if (inlined) return inlined;
   for (let dir = process.cwd(); ; dir = dirname(dir)) {
     const file = join(dir, "publik-app-token.txt");
     try {
