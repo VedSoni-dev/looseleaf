@@ -63,7 +63,7 @@ export function parseLeaf(text: string): Notebook {
     const page = (p ?? {}) as Record<string, unknown>;
     const items = Array.isArray(page.items) ? page.items.map(cleanItem).filter((i): i is Item => !!i) : [];
     return {
-      id: str(page.id, uid(), 64),
+      id: uid(), // page ids are internal; fresh ones rule out duplicates in a hand-edited file
       paper: PAPERS.includes(page.paper as Paper) ? (page.paper as Paper) : "ruled",
       items,
     };
@@ -146,10 +146,13 @@ export async function exportPDF(nb: Notebook): Promise<SaveResult> {
   const w = PAGE_W * 0.75;
   const h = PAGE_H * 0.75;
   const pdf = new jsPDF({ unit: "pt", format: [w, h], compress: true });
-  nb.pages.forEach((page, i) => {
+  for (let i = 0; i < nb.pages.length; i++) {
     if (i > 0) pdf.addPage([w, h]);
-    pdf.addImage(pageToCanvas(page, 2).toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, w, h);
-  });
+    const canvas = pageToCanvas(nb.pages[i], 2);
+    pdf.addImage(canvas.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, w, h);
+    canvas.width = 0; // hand the bitmap back now: iPad Safari has a small canvas memory budget
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
   return saveFile(pdf.output("blob"), `${safeName(nb.title)}.pdf`, "PDF document");
 }
 

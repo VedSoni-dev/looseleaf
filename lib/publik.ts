@@ -31,7 +31,7 @@ export interface PublikCredential {
 }
 
 /** True when the builder deployed this to a host with no durable disk: credentials ride in a cookie instead. */
-export const HOSTED = !!process.env.VERCEL;
+export const HOSTED = !!process.env.VERCEL || process.env.LOOSELEAF_HOSTED === "1";
 
 /** The app token. Public by design (it can only mint capped keys attributed to this app), so
  *  publik-app-token.txt is committed at the repo root. PUBLIK_APP_TOKEN in the environment overrides it. */
@@ -164,13 +164,13 @@ export function decodeCookie(value: string | undefined): { key: string; install_
 }
 
 /** The publik key for this request, or null when the user has not turned publik on yet. */
-export function resolvePublikKey(cookieValue: string | undefined): { apiKey: string; baseURL: string } | null {
+export function resolvePublikKey(cookieValue: string | undefined): { apiKey: string; baseURL: string; source: "env" | "cookie" | "file" } | null {
   if (process.env.PUBLIK_API_KEY) {
-    return { apiKey: process.env.PUBLIK_API_KEY, baseURL: process.env.PUBLIK_API_BASE_URL ?? DEFAULT_BASE_URL };
+    return { apiKey: process.env.PUBLIK_API_KEY, baseURL: process.env.PUBLIK_API_BASE_URL ?? DEFAULT_BASE_URL, source: "env" };
   }
   const fromCookie = decodeCookie(cookieValue);
-  if (fromCookie) return { apiKey: fromCookie.key, baseURL: DEFAULT_BASE_URL };
+  if (fromCookie) return { apiKey: fromCookie.key, baseURL: DEFAULT_BASE_URL, source: "cookie" };
   const fromFile = readCredential();
-  if (fromFile) return { apiKey: fromFile.key, baseURL: fromFile.base_url || DEFAULT_BASE_URL };
+  if (fromFile) return { apiKey: fromFile.key, baseURL: fromFile.base_url || DEFAULT_BASE_URL, source: "file" };
   return null;
 }

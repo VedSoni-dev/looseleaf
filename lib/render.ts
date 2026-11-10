@@ -102,10 +102,16 @@ export function layoutText(t: TextItem): { lines: string[]; h: number } {
         line = next;
         // A single word wider than the box: break it by characters.
         while (ctx.measureText(line).width > t.w && line.length > 1) {
-          let cut = line.length - 1;
-          while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > t.w) cut--;
-          lines.push(line.slice(0, cut));
-          line = line.slice(cut);
+          // Binary search for the longest prefix that fits, so one huge token cannot hang the tab.
+          let lo = 1;
+          let hi = line.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (ctx.measureText(line.slice(0, mid)).width <= t.w) lo = mid;
+            else hi = mid - 1;
+          }
+          lines.push(line.slice(0, lo));
+          line = line.slice(lo);
         }
       } else {
         lines.push(line);

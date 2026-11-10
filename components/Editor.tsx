@@ -61,6 +61,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const docRef = useRef<Notebook | null>(null);
   const editRef = useRef<TextEdit | null>(null);
   const dirty = useRef(false);
+  const draft = useRef("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thumbPage = useRef<Page | null>(null);
 
@@ -76,9 +77,11 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const flush = useCallback(async () => {
+  const flush = useCallback(async (commitText = false): Promise<boolean> => {
+    // When leaving, text still being typed is part of the notebook: commit it before saving.
+    if (commitText && editRef.current) engineRef.current?.finishTextEdit(draft.current);
     const doc = docRef.current;
-    if (!dirty.current || !doc) return;
+    if (!dirty.current || !doc) return true;
     dirty.current = false;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     let thumb: string | undefined;
@@ -89,9 +92,11 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
     try {
       await saveNotebook(doc, thumb);
       if (!dirty.current) setSaveState("saved");
+      return true;
     } catch {
       dirty.current = true;
       setSaveState("error");
+      return false;
     }
   }, []);
 
@@ -114,13 +119,14 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
             dirty.current = true;
             setSaveState("saving");
             if (saveTimer.current) clearTimeout(saveTimer.current);
-            saveTimer.current = setTimeout(flush, 450);
+            saveTimer.current = setTimeout(() => void flush(), 450);
           },
           onTextEdit: (next) => {
             const area = textRef.current;
             // Focus synchronously, inside the tap that asked for it, or iPadOS will not raise the keyboard.
             if (next && area && editRef.current?.item.id !== next.item.id) {
               area.value = next.item.text;
+              draft.current = next.item.text;
               area.focus();
             }
             editRef.current = next;
@@ -134,19 +140,20 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
       .catch(() => !cancelled && setStatus("error"));
 
     const onHide = () => {
-      if (document.visibilityState === "hidden") flush();
+      if (document.visibilityState === "hidden") flush(true);
     };
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const onScheme = () => engineRef.current?.readTheme();
     document.addEventListener("visibilitychange", onHide);
-    window.addEventListener("pagehide", flush);
+    const onPageHide = () => void flush(true);
+    window.addEventListener("pagehide", onPageHide);
     scheme.addEventListener("change", onScheme);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onHide);
-      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pagehide", onPageHide);
       scheme.removeEventListener("change", onScheme);
-      flush();
+      flush(true);
       engine?.destroy();
       engineRef.current = null;
     };
@@ -234,7 +241,8 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   };
 
   const exit = async () => {
-    await flush();
+    const saved = await flush(true);
+    if (!saved && !window.confirm("Your latest changes couldn't be saved in this browser (storage may be full). Leave anyway?")) return;
     onExit();
   };
 
@@ -266,6 +274,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
         }}
         onInput={(e) => {
           const area = e.currentTarget;
+          draft.current = area.value;
           area.style.height = "auto";
           area.style.height = `${area.scrollHeight}px`;
         }}

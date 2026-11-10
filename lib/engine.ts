@@ -12,6 +12,7 @@ import {
   renderPage,
   translateItem,
   unionBounds,
+  TEXT_LINE,
   type Box,
 } from "./render";
 import {
@@ -134,6 +135,7 @@ export class InkEngine {
   private zoomTimer: ReturnType<typeof setTimeout> | null = null;
   private inertia = 0;
   private pageIndex = 0;
+  private gestureZoom = 1;
   private desk = "#ECE9E2";
   private accent = "#2F7D4F";
   private resizeObserver: ResizeObserver;
@@ -238,6 +240,7 @@ export class InkEngine {
 
   addPage() {
     const at = Math.min(this.pageIndex, this.doc.pages.length - 1);
+    this.selection = null;
     const pages = this.doc.pages.slice();
     pages.splice(at + 1, 0, newPage(this.doc.pages[at]?.paper ?? "ruled"));
     this.mutate(pages);
@@ -343,19 +346,41 @@ export class InkEngine {
       const top = (TOP_INSET - this.view.y) / this.view.z - page * ROW;
       y = Math.max(48, Math.min(PAGE_H - 200, top + 40));
     }
-    const item: TextItem = {
+    const make = (text: string, tx: number, ty: number): TextItem => ({
       id: uid(),
       type: "text",
-      x,
-      y,
-      w: Math.min(PAGE_W - x - 40, 620),
-      text: clean,
+      x: tx,
+      y: ty,
+      w: Math.min(PAGE_W - tx - 40, 620),
+      text,
       color: PEN_COLORS[0],
       size: 17,
-    };
-    this.mutatePage(page, (items) => [...items, item]);
+    });
+    let item = make(clean, x, y);
+    const margin = 32;
+    const lineHeight = item.size * TEXT_LINE;
+    const { lines, h } = layoutText(item);
+    const perPage = Math.floor((PAGE_H - margin * 3) / lineHeight);
     this.tool = "lasso";
-    this.selection = { page, ids: new Set([item.id]) };
+    if (lines.length <= perPage) {
+      // Fits on this page: slide it up if it would run off the bottom.
+      if (y + h > PAGE_H - margin) item = make(clean, x, Math.max(margin, PAGE_H - margin - h));
+      const placed = item;
+      this.mutatePage(page, (items) => [...items, placed]);
+      this.selection = { page, ids: new Set([placed.id]) };
+    } else {
+      // Too long for one page: continue onto fresh pages rather than clipping the text.
+      const pages = this.doc.pages.slice();
+      const paper = pages[page].paper;
+      const fresh: Page[] = [];
+      for (let i = 0; i < lines.length; i += perPage) {
+        fresh.push({ ...newPage(paper), items: [make(lines.slice(i, i + perPage).join("\n"), 100, margin * 1.5)] });
+      }
+      pages.splice(page + 1, 0, ...fresh);
+      this.selection = null;
+      this.mutate(pages);
+      this.scrollToPage(page + 1);
+    }
     this.renderAll();
     this.emit();
   }
@@ -704,9 +729,14 @@ export class InkEngine {
   private onGesture = (e: Event & { scale?: number; clientX?: number; clientY?: number }) => {
     // Safari's trackpad pinch. Finger pinches on iPad are handled through pointer events instead.
     e.preventDefault();
-    if (this.touches.size || e.type !== "gesturechange" || !e.scale) return;
-    const p = this.local({ clientX: e.clientX ?? 0, clientY: e.clientY ?? 0 });
-    this.zoomAt(p, this.view.z * (1 + (e.scale - 1) * 0.08));
+    if (this.touches.size || this.ignoredTouches.size || this.action || !e.scale) return;
+    if (e.type === "gesturestart") {
+      this.gestureZoom = this.view.z;
+      return;
+    }
+    // e.scale is cumulative since gesturestart, so always scale from the zoom we started at.
+    const p = e.clientX != null && e.clientY != null ? this.local({ clientX: e.clientX, clientY: e.clientY }) : { x: this.w / 2, y: this.h / 2 };
+    this.zoomAt(p, this.gestureZoom * e.scale);
   };
 
   private onWheel = (e: WheelEvent) => {
@@ -746,10 +776,9 @@ export class InkEngine {
         }
       }
       // A resting palm may already have started a pan or pinch: undo it and ignore those touches.
-      if (this.action && (this.action.kind === "pan" || this.action.kind === "pinch") && this.action.ptype === "touch") {
-        this.view = { ...this.action.start };
-        this.action = null;
-        this.renderAll();
+      if (this.action && this.action.ptype === "touch") {
+        if (this.action.kind === "pan" || this.action.kind === "pinch") this.view = { ...this.action.start };
+        this.cancelAction();
       }
       for (const id of this.touches.keys()) this.ignoredTouches.add(id);
       this.touches.clear();
@@ -783,7 +812,22 @@ export class InkEngine {
     this.action = { kind: "pan", id: e.pointerId, ptype: e.pointerType, lx: p.x, ly: p.y, start: { ...this.view }, vx: 0, vy: 0, t: e.timeStamp };
   }
 
+  /** Drops whatever gesture is in flight without committing it, leaving no half-state behind. */
+  private cancelAction() {
+    const a = this.action;
+    if (!a) return;
+    // An erase has already changed the page: keep it, and make sure it gets saved.
+    if (a.kind === "erase" && a.snapped) {
+      this.host.onChange(this.doc);
+      this.emit();
+    }
+    this.action = null;
+    this.lift = null;
+    this.renderAll();
+  }
+
   private startPinch() {
+    this.cancelAction();
     const [a, b] = [...this.touches.values()];
     this.action = {
       kind: "pinch",
@@ -927,8 +971,12 @@ export class InkEngine {
 
     if (a.kind === "move") {
       const w = this.toWorld(p);
+      const box = unionBounds(this.selectedItems());
       a.dx = w.x - a.sx;
       a.dy = w.y - a.sy;
+      // Pages clip their ink, so a selection may not be dragged off the page it lives on.
+      if (box && box.w < PAGE_W) a.dx = Math.max(-box.x, Math.min(PAGE_W - box.x - box.w, a.dx));
+      if (box && box.h < PAGE_H) a.dy = Math.max(-box.y, Math.min(PAGE_H - box.y - box.h, a.dy));
       this.renderOverlay();
     }
   };

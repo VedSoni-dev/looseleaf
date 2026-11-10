@@ -1,5 +1,6 @@
 // Looseleaf service worker: keeps the app shell available offline. Notes themselves live in IndexedDB.
-const CACHE = "looseleaf-shell-v1";
+const CACHE = "looseleaf-shell-v2";
+const SHELL_TIMEOUT = 4000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.add("/")).then(() => self.skipWaiting()));
@@ -36,13 +37,22 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     // Fresh shell when online, cached shell when not.
+    // Only the app itself is the shell; opening /icon.svg in a tab must not replace it.
+    const isShell = url.pathname === "/";
+    const network = fetch(request).then((res) => {
+      if (isShell && res.ok) {
+        const copy = res.clone();
+        event.waitUntil(caches.open(CACHE).then((cache) => cache.put("/", copy)));
+      }
+      return res;
+    });
+    const cached = () => caches.match("/").then((hit) => hit || Response.error());
+    // On a connection that never answers, fall back to the saved shell instead of hanging.
+    const slow = new Promise((resolve) => setTimeout(resolve, SHELL_TIMEOUT)).then(() => caches.match("/"));
     event.respondWith(
-      fetch(request)
-        .then((res) => {
-          if (res.ok) caches.open(CACHE).then((cache) => cache.put("/", res.clone()));
-          return res.clone();
-        })
-        .catch(() => caches.match("/").then((hit) => hit || Response.error())),
+      isShell
+        ? Promise.race([network.catch(() => undefined), slow]).then((res) => res || network.catch(cached))
+        : network.catch(cached),
     );
     return;
   }

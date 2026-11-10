@@ -74,6 +74,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
     const abort = useRef<AbortController | null>(null);
     const pending = useRef<ChatMsg[] | null>(null);
+    const sending = useRef(false); // set before the first await, so a double tap cannot send twice
     const scroller = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -130,6 +131,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
           });
         }
       } finally {
+        sending.current = false;
         setBusy(false);
       }
     };
@@ -152,6 +154,8 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
     /** Sends the thread if a provider is ready; otherwise parks it behind the consent card. */
     const submit = async (thread: ChatMsg[]) => {
+      if (sending.current) return;
+      sending.current = true;
       setFailure(null);
       setMsgs(thread);
       if (loadOwnKey()) return run(thread);
@@ -164,12 +168,13 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
         setAvailable(false);
       }
       pending.current = thread;
+      sending.current = false;
       setView("consent");
     };
 
     const begin = (text: string, label: string, source: "page" | "selection") => {
       const e = engine.current;
-      if (!e || busy) return;
+      if (!e || busy || sending.current) return;
       if (source === "page" && e.currentPageIsEmpty()) {
         setMsgs([]);
         setFailure({ message: "This page is blank. Write something first, then ask." });
@@ -191,7 +196,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
     const send = () => {
       const text = draft.trim();
-      if (!text || busy) return;
+      if (!text || busy || sending.current) return;
       setDraft("");
       if (msgs.length === 0) begin(text, text, "page");
       else submit([...msgs, { role: "user", text }]);

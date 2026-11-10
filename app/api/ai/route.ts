@@ -41,7 +41,13 @@ export async function POST(request: Request) {
     return fail(400, "That request was not valid JSON.");
   }
 
-  const messages = Array.isArray(body.messages) ? body.messages.slice(-24) : [];
+  // Long threads are trimmed, but the first message carries the page image and must always survive.
+  let messages = Array.isArray(body.messages) ? body.messages : [];
+  if (messages.length > 24) {
+    let tail = messages.slice(-23);
+    if (tail[0]?.role === "user") tail = tail.slice(1);
+    messages = [messages[0], ...tail];
+  }
   if (!messages.length) return fail(400, "Nothing to ask yet.");
   let bytes = 0;
   for (const m of messages) {
@@ -56,6 +62,7 @@ export async function POST(request: Request) {
   let apiKey: string;
   let model: string;
   let viaPublik = false;
+  let fromCookie = false;
   const own = body.own;
   if (own?.key) {
     if (own.kind === "custom") {
@@ -77,6 +84,7 @@ export async function POST(request: Request) {
     apiKey = publik.apiKey;
     model = MODELS.balanced;
     viaPublik = true;
+    fromCookie = publik.source === "cookie";
   }
 
   const upstreamBody = {
@@ -129,8 +137,11 @@ export async function POST(request: Request) {
         : upstream.status === 429 ? "Rate limited. Give it a few seconds and try again."
         : `The AI provider answered ${upstream.status}.`;
     }
+    // A revoked browser install: forget it so the panel can offer "Turn on AI" again.
+    const revoked = fromCookie && upstream.status === 401;
+    if (revoked) (await cookies()).delete(COOKIE);
     return Response.json(
-      { error: { message, top_up_url: viaPublik ? topUp : undefined, code: upstream.status === 402 ? "balance" : undefined } },
+      { error: { message, top_up_url: viaPublik ? topUp : undefined, code: revoked ? "needs_consent" : upstream.status === 402 ? "balance" : undefined } },
       { status: upstream.status === 200 ? 502 : upstream.status, headers: passthrough },
     );
   }

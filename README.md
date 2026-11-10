@@ -29,6 +29,7 @@ Server environment variables (all optional):
 | `PUBLIK_APP_TOKEN` | The app's public publik token. Overrides `publik-app-token.txt`. |
 | `PUBLIK_API_KEY` | Use one fixed publik key for every request (handy for local testing). |
 | `PUBLIK_API_BASE_URL` | Override the publik API base URL. |
+| `LOOSELEAF_HOSTED` | Set to `1` when you host this for other people anywhere but Vercel, so each visitor gets their own publik install (kept in a cookie) instead of sharing the server's. |
 
 What is sent: only the page image (or the lassoed part) and your question, and only when you ask. Notes are never uploaded otherwise.
 
