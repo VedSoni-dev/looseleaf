@@ -10,7 +10,7 @@ import { arch, homedir, hostname, platform } from "node:os";
 import { dirname, join } from "node:path";
 
 export const APP_SLUG = "looseleaf";
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.1.1";
 export const DEFAULT_BASE_URL = "https://publikhq.com/api/v1";
 /** Ask for a tier, never a vendor model name. */
 export const MODELS = { fast: "publik-fast", balanced: "publik-balanced", smart: "publik-smart" } as const;
