@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Looseleaf
 
-## Getting Started
+A free handwriting notebook that runs in the browser. Built for iPad and Apple Pencil, works with a mouse or finger too. A free alternative to Goodnotes.
 
-First, run the development server:
+- **No sign-up.** Open it and write. Notebooks are saved in your browser (IndexedDB).
+- **Unlimited notebooks and pages**, no watermark on exports.
+- **Portable `.leaf` files.** Export a notebook, open it on any other device. The format is plain JSON (see below).
+- **Pencil-first input.** Pressure-sensitive ink, palm rejection, one-finger scroll and pinch zoom once a Pencil is detected.
+- **AI that reads your handwriting.** Lasso some ink and convert it to text, have it explained, or get a maths problem solved. Ask questions about a whole page, make flashcards, get quizzed.
+- **Works offline** after the first visit (AI needs a connection). Add it to the iPad Home Screen for a full-screen app.
+
+## Run it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000. For a production build: `npm run build && npm start`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## AI
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+AI features go through [publik API](https://publikhq.com/developers), so users need no key: they press "Turn on AI", and linking a publik account gives a little free use. Anyone can instead paste their own OpenAI or Anthropic **API key** under the key icon in the AI panel; it is stored only in that browser. ChatGPT and Claude subscriptions are not API keys and cannot be used.
 
-## Learn More
+Server environment variables (all optional):
 
-To learn more about Next.js, take a look at the following resources:
+| Name | Purpose |
+|---|---|
+| `PUBLIK_APP_TOKEN` | The app's public publik token. Overrides `publik-app-token.txt`. |
+| `PUBLIK_API_KEY` | Use one fixed publik key for every request (handy for local testing). |
+| `PUBLIK_API_BASE_URL` | Override the publik API base URL. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+What is sent: only the page image (or the lassoed part) and your question, and only when you ask. Notes are never uploaded otherwise.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## The `.leaf` format
 
-## Deploy on Vercel
+A `.leaf` file is one JSON object:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```jsonc
+{
+  "format": "looseleaf",
+  "version": 1,
+  "id": "…", "title": "Physics", "cover": "#2F7D4F",
+  "createdAt": 1794300000000, "updatedAt": 1794300000000,
+  "pages": [
+    {
+      "id": "…",
+      "paper": "ruled",            // blank | ruled | grid | dots
+      "items": [
+        // pts is a flat list of x, y, pressure triples; a page is 816 × 1056 units
+        { "id": "…", "type": "stroke", "tool": "pen", "color": "#1F1F1F", "size": 4, "real": true, "pts": [120, 200, 0.4, 121.5, 201, 0.5] },
+        { "id": "…", "type": "text", "x": 100, "y": 300, "w": 420, "size": 18, "color": "#1F1F1F", "text": "Typed text" }
+      ]
+    }
+  ]
+}
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Readers should skip item types they do not know.
+
+## Shortcuts
+
+`P` pen · `H` highlighter · `E` eraser · `L` lasso · `T` text · `⌘Z` / `⇧⌘Z` undo and redo · `⌘D` duplicate selection · `Delete` remove selection · hold `Space` and drag to pan · `⌘`/`Ctrl` + scroll to zoom.
+
+## Not in this version
+
+PDF import and annotation, audio recording, real-time collaboration, handwriting search, shape snapping, accounts and cloud sync.
+
+## Stack
+
+Next.js (App Router), TypeScript, Tailwind, [perfect-freehand](https://github.com/steveruizok/perfect-freehand) for stroke geometry, jsPDF for PDF export.
+
+MIT licensed.
