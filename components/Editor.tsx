@@ -46,6 +46,17 @@ const PAPERS: { paper: Paper; label: string }[] = [
   { paper: "blank", label: "Blank" },
 ];
 
+const CUSTOM_KEY = "looseleaf.customColors";
+const RAINBOW = "conic-gradient(from 0deg, #f43f5e, #f59e0b, #facc15, #22c55e, #06b6d4, #6366f1, #d946ef, #f43f5e)";
+
+function loadCustom(): { pen: string; highlighter: string } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? "null");
+    if (saved && /^#[0-9a-f]{6}$/i.test(saved.pen) && /^#[0-9a-f]{6}$/i.test(saved.highlighter)) return saved;
+  } catch {}
+  return { pen: "#0E7490", highlighter: "#C4B5FD" };
+}
+
 const HINTS: Partial<Record<Tool, string>> = {
   eraser: "Swipe across ink to erase it",
   lasso: "Circle something to select it",
@@ -70,6 +81,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const [title, setTitle] = useState("");
   const [pen, setPen] = useState({ color: PEN_COLORS[0], size: PEN_SIZES[1] });
   const [marker, setMarker] = useState({ color: HIGHLIGHT_COLORS[0], size: HIGHLIGHT_SIZES[1] });
+  const [custom, setCustom] = useState(loadCustom);
   const [edit, setEdit] = useState<{ item: TextEdit["item"]; rect: ReturnType<InkEngine["textRect"]> } | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [menu, setMenu] = useState(false);
@@ -251,6 +263,16 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const colors = tool === "highlighter" ? HIGHLIGHT_COLORS : PEN_COLORS;
   const sizes = tool === "highlighter" ? HIGHLIGHT_SIZES : PEN_SIZES;
   const choose = tool === "highlighter" ? chooseMarker : choosePen;
+  const customKey = tool === "highlighter" ? "highlighter" : "pen";
+  const customActive = !colors.includes(style.color);
+  const pickCustom = (color: string) => {
+    const next = { ...custom, [customKey]: color };
+    setCustom(next);
+    try {
+      localStorage.setItem(CUSTOM_KEY, JSON.stringify(next));
+    } catch {}
+    choose({ color });
+  };
   const rect = edit?.rect ?? null;
   const pill = "pointer-events-auto flex items-center rounded-full border border-line bg-panel/95 shadow-float backdrop-blur";
   const iconBtn = "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink hover:bg-panel-2 disabled:opacity-30 disabled:hover:bg-transparent";
@@ -439,6 +461,24 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
                     />
                   </button>
                 ))}
+                {/* Any colour: the native picker, which on iPad is the full system colour sheet. */}
+                <label aria-label="Custom colour" title="Custom colour" className="relative flex h-9 w-8 shrink-0 cursor-pointer items-center justify-center">
+                  <span
+                    className="block h-6 w-6 rounded-full transition-transform"
+                    style={{
+                      background: customActive ? style.color : RAINBOW,
+                      boxShadow: customActive ? `0 0 0 2px var(--panel), 0 0 0 4px ${style.color}` : "inset 0 0 0 1px rgba(0,0,0,0.12)",
+                      transform: customActive ? "scale(0.82)" : undefined,
+                    }}
+                  />
+                  <input
+                    type="color"
+                    value={custom[customKey]}
+                    onClick={() => choose({ color: custom[customKey] })}
+                    onChange={(e) => pickCustom(e.target.value)}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </label>
                 <span className="mx-1.5 h-6 w-px shrink-0 bg-line" />
                 {sizes.map((s, i) => (
                   <button
