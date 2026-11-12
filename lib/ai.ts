@@ -15,14 +15,6 @@ export interface ChatMsg {
   label?: string;
 }
 
-export interface PublikCard {
-  balance_line: string;
-  cost_sentence: string | null;
-  claim_state: "anonymous" | "claimed";
-  claim_url: string | null;
-  add_credit_url: string | null;
-}
-
 export class AIError extends Error {
   constructor(
     message: string,
@@ -35,7 +27,6 @@ export class AIError extends Error {
 }
 
 const OWN_KEY = "looseleaf.ownkey";
-const PUBLIK_CARD = "looseleaf.publik";
 
 function read<T>(name: string): T | null {
   try {
@@ -55,28 +46,11 @@ function write(name: string, value: unknown) {
 
 export const loadOwnKey = () => read<OwnKey>(OWN_KEY);
 export const saveOwnKey = (k: OwnKey | null) => write(OWN_KEY, k);
-export const loadPublikCard = () => read<PublikCard>(PUBLIK_CARD);
-export const savePublikCard = (c: PublikCard | null) => write(PUBLIK_CARD, c);
 
 export const DEFAULT_MODELS: Record<OwnKey["kind"], string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-sonnet-5-5",
 };
-
-export async function publikStatus(): Promise<{ connected: boolean; available: boolean; disclosure: string }> {
-  const res = await fetch("/api/publik/status", { cache: "no-store" });
-  if (!res.ok) throw new AIError("Could not check AI status.", res.status);
-  return res.json();
-}
-
-/** Only call after the user pressed the button under the disclosure text. */
-export async function turnOnPublik(): Promise<PublikCard> {
-  const res = await fetch("/api/publik/provision", { method: "POST" });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new AIError(body?.error?.message ?? "publik API could not be set up. Use your own key for now.", res.status);
-  savePublikCard(body);
-  return body;
-}
 
 export interface StreamResult {
   provider: string | null;
@@ -84,14 +58,15 @@ export interface StreamResult {
   balance: string | null;
 }
 
-export async function streamChat(messages: ChatMsg[], onDelta: (text: string) => void, signal?: AbortSignal): Promise<StreamResult> {
+/** viaPublik: the person chose their publik plan at Sign in with publik, so their own key is not sent. */
+export async function streamChat(messages: ChatMsg[], onDelta: (text: string) => void, viaPublik: boolean, signal?: AbortSignal): Promise<StreamResult> {
   let res: Response;
   try {
     res = await fetch("/api/ai", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        own: loadOwnKey(),
+        own: viaPublik ? null : loadOwnKey(),
         messages: messages.map(({ role, text, image }) => ({ role, text, image })),
       }),
       signal,

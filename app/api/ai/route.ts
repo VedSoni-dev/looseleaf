@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { COOKIE, MODELS, resolvePublikKey } from "@/lib/publik";
+import { MODELS, resolveProvider, topUpUrlFrom402 } from "@/lib/publik";
 
 export const maxDuration = 60;
 
@@ -25,8 +25,8 @@ const SYSTEM = [
 ].join(" ");
 
 const OWN_DEFAULTS = {
-  openai: { url: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini" },
-  anthropic: { url: "https://api.anthropic.com/v1/chat/completions", model: "claude-sonnet-5-5" },
+  openai: { baseURL: "https://api.openai.com/v1", model: "gpt-5-mini" },
+  anthropic: { baseURL: "https://api.anthropic.com/v1", model: "claude-sonnet-5-5" },
 } as const;
 
 function fail(status: number, message: string, extra: Record<string, unknown> = {}) {
@@ -57,35 +57,37 @@ export async function POST(request: Request) {
   }
   if (bytes > 3_600_000) return fail(413, "That page is too large to send. Try lassoing a smaller part.");
 
-  // 1. The user's own key always wins. 2. Otherwise publik API.
-  let url: string;
-  let apiKey: string;
-  let model: string;
-  let viaPublik = false;
-  let fromCookie = false;
+  // The person's own key, exactly as before. Whether it is used is the choice they made at
+  // Sign in with publik: resolveProvider() picks this browser's publik key when they chose their
+  // publik plan, else this key.
+  let ownKey: { baseURL: string; apiKey: string } | null = null;
+  let ownModel = "";
+  let ownProblem: string | null = null;
   const own = body.own;
   if (own?.key) {
     if (own.kind === "custom") {
-      if (process.env.LOOSELEAF_ALLOW_CUSTOM_BASE !== "1" || !own.baseURL) return fail(400, "Custom endpoints are turned off on this server.");
-      url = `${own.baseURL.replace(/\/+$/, "")}/chat/completions`;
-      model = own.model || "default";
+      if (process.env.LOOSELEAF_ALLOW_CUSTOM_BASE !== "1" || !own.baseURL) ownProblem = "Custom endpoints are turned off on this server.";
+      else {
+        ownKey = { baseURL: own.baseURL.replace(/\/+$/, ""), apiKey: own.key };
+        ownModel = own.model || "default";
+      }
     } else if (own.kind === "openai" || own.kind === "anthropic") {
-      url = OWN_DEFAULTS[own.kind].url;
-      model = own.model?.trim() || OWN_DEFAULTS[own.kind].model;
+      ownKey = { baseURL: OWN_DEFAULTS[own.kind].baseURL, apiKey: own.key };
+      ownModel = own.model?.trim() || OWN_DEFAULTS[own.kind].model;
     } else {
-      return fail(400, "Unknown key type.");
+      ownProblem = "Unknown key type.";
     }
-    apiKey = own.key;
-  } else {
-    const jar = await cookies();
-    const publik = resolvePublikKey(jar.get(COOKIE)?.value);
-    if (!publik) return fail(401, "Turn on AI first.", { code: "needs_consent" });
-    url = `${publik.baseURL}/chat/completions`;
-    apiKey = publik.apiKey;
-    model = MODELS.balanced;
-    viaPublik = true;
-    fromCookie = publik.source === "cookie";
   }
+
+  const provider = resolveProvider(await cookies(), ownKey);
+  if (provider.kind === "needs_own_key") {
+    if (ownProblem) return fail(400, ownProblem);
+    return fail(401, "Add your OpenAI or Anthropic API key, or switch to your publik plan.", { code: "needs_key" });
+  }
+  const viaPublik = provider.kind === "publik";
+  const url = `${provider.baseURL}/chat/completions`;
+  const apiKey = provider.apiKey;
+  const model = viaPublik ? MODELS.balanced : ownModel;
 
   const upstreamBody = {
     model,
@@ -124,24 +126,21 @@ export async function POST(request: Request) {
 
   if (!upstream.ok || !upstream.body) {
     const raw = await upstream.text().catch(() => "");
-    let message = "";
-    let topUp: string | undefined;
+    let parsed: { error?: { message?: string } } | null = null;
     try {
-      const parsed = JSON.parse(raw);
-      message = parsed?.error?.message ?? "";
-      topUp = parsed?.error?.top_up_url;
+      parsed = JSON.parse(raw);
     } catch {}
+    // publik's 402: its message plus exactly one link, error.top_up_url.
+    const topUp = viaPublik && upstream.status === 402 ? topUpUrlFrom402(parsed) : null;
+    let message = topUp?.message ?? parsed?.error?.message ?? "";
     if (!message) {
       message =
-        upstream.status === 401 ? (viaPublik ? "publik API did not accept this install. Turn AI on again." : "Your provider rejected that API key.")
+        upstream.status === 401 ? (viaPublik ? "publik did not accept this browser's key. Reload Looseleaf to sign in with publik again." : "Your provider rejected that API key.")
         : upstream.status === 429 ? "Rate limited. Give it a few seconds and try again."
         : `The AI provider answered ${upstream.status}.`;
     }
-    // A revoked browser install: forget it so the panel can offer "Turn on AI" again.
-    const revoked = fromCookie && upstream.status === 401;
-    if (revoked) (await cookies()).delete(COOKIE);
     return Response.json(
-      { error: { message, top_up_url: viaPublik ? topUp : undefined, code: revoked ? "needs_consent" : upstream.status === 402 ? "balance" : undefined } },
+      { error: { message, top_up_url: topUp?.url ?? undefined, code: upstream.status === 402 && viaPublik ? "balance" : undefined } },
       { status: upstream.status === 200 ? 502 : upstream.status, headers: passthrough },
     );
   }

@@ -1,12 +1,9 @@
 import { cookies } from "next/headers";
-import { COOKIE, DISCLOSURE, hasAppToken, resolvePublikKey } from "@/lib/publik";
+import { gateStatus } from "@/lib/publik";
 
-/** Tells the AI panel which first-run state to show. Never returns a key. */
-export async function GET() {
-  const jar = await cookies();
-  const connected = !!resolvePublikKey(jar.get(COOKIE)?.value);
-  return Response.json(
-    { connected, available: connected || hasAppToken(), disclosure: DISCLOSURE },
-    { headers: { "cache-control": "no-store" } },
-  );
+/** The gate's current screen for this browser. Read only: a browser with no install gets
+ *  { state: "needs_install" } and PublikGate then calls POST /api/publik/provision. */
+export async function GET(req: Request) {
+  const status = await gateStatus(await cookies(), req, { provision: false });
+  return Response.json(status, { headers: { "cache-control": "no-store" } });
 }
