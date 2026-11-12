@@ -6,7 +6,7 @@
 
 **Handwritten notes for iPad and Apple Pencil, right in the browser. Free, no notebook limit, and your notes stay on your device.**
 
-**[Open Looseleaf](https://looseleaf-seven-green.vercel.app)** · nothing to install · MIT licensed · a free alternative to Goodnotes
+**[looseleaf-seven-green.vercel.app](https://looseleaf-seven-green.vercel.app)** · the app itself is at **[/app](https://looseleaf-seven-green.vercel.app/app)** · nothing to install · MIT licensed · a free alternative to Goodnotes
 
 <p align="center">
   <img src="docs/media/drawing.gif" alt="Notes being handwritten into a Looseleaf page: a title, two lines, a boxed equation and a highlight" width="760">
@@ -30,12 +30,12 @@
 
 ## What you get
 
-- **Sign in with publik, then write.** There is no Looseleaf account. Notebooks are saved in your browser (IndexedDB).
+- **A public page, then the app.** The site's front page explains Looseleaf; **Open Looseleaf** takes you to the app at `/app`, where you sign in with publik and write. There is no Looseleaf account. Notebooks are saved in your browser (IndexedDB).
 - **Unlimited notebooks and pages**, no watermark on exports.
 - **Portable `.leaf` files.** Export a notebook, open it on any other device. The format is plain JSON (see below).
 - **Pencil-first input.** Pressure-sensitive ink, palm rejection, one-finger scroll and pinch zoom once a Pencil is detected. Works with a mouse or finger too. (This is v0.1: the Pencil handling has not had a tuning pass on a real iPad yet, so issues are very welcome.)
 - **AI that reads your handwriting.** Lasso some ink and convert it to text, have it explained, or get a maths problem solved. Ask questions about a whole page, make flashcards, get quizzed.
-- **Add it to the iPad Home Screen** for a full-screen app. Opening it needs a connection, because Sign in with publik checks in each time; your notes themselves never leave the device.
+- **Add it to the iPad Home Screen** for a full-screen app; it opens straight into `/app`. Opening it needs a connection, because Sign in with publik checks in each time; your notes themselves never leave the device.
 
 ## Compared with Goodnotes
 
@@ -66,11 +66,11 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:3000. For a production build: `npm run build && npm start`.
+Then open http://localhost:3000 for the landing page, or http://localhost:3000/app for the app. For a production build: `npm run build && npm start`.
 
 ## Sign in and privacy
 
-Looseleaf opens with **Sign in with publik**, before the first screen. Your notebooks still live only in your browser; signing in does not upload them anywhere.
+The landing page at `/` is public. The app at `/app` opens with **Sign in with publik**, before its first screen. Your notebooks still live only in your browser; signing in does not upload them anywhere. Notebooks made before 0.1.4, when the app was at `/`, are still there (same site, same browser storage), and old `/#/n/…` notebook links and older Home Screen installs are sent on to `/app`.
 
 To count its users, Looseleaf sends publik two events and nothing else: `app_opened` (once per browser session) and `active_session` (every 30 minutes while a tab is open). Each one carries the app's name and version, your operating system and a random ID for this browser, sent with this browser's publik key. No notes, pages, questions or answers. Browsers with Do Not Track or Global Privacy Control turned on are never counted.
 

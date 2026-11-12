@@ -1,7 +1,7 @@
 "use client";
 
 // PublikGate: Sign in with publik before the app's first screen, for a hosted Next.js app.
-// Wrap the app in app/layout.tsx: <body><PublikGate appName="My App">{children}</PublikGate></body>.
+// Wrap only the software (here app/app/page.tsx), never the public landing page at / or the root layout.
 // It draws what /api/publik/* answers; the words, the key and every publik call stay on the server
 // (lib/publik.ts). Nothing of the app renders until the gate says "ready". Brand it with --publik-* CSS
 // variables (see the README). usePublik() gives the app the choice; <PublikChoice /> is the setting.
@@ -206,8 +206,23 @@ export function PublikGate({ appName, children }: { appName?: string; children: 
           </div>
         )}
         <noscript><p className="pk-note">Turn on JavaScript to sign in with publik.</p></noscript>
+        <PublikPitch appName={appName} />
       </div>
     </main>
+  );
+}
+
+/** Why publik: shown on the gate and on the landing page. publik's mission line is their own words. */
+export function PublikPitch({ appName = "this app", className = "pk-pitch" }: { appName?: string; className?: string }) {
+  return (
+    <div className={className}>
+      <p>
+        {appName} is free on <a href="https://publikhq.com" target="_blank" rel="noopener noreferrer">publik</a>, a free software marketplace.
+        When you use it through publik, its builder earns a small share of the usage, which keeps {appName} free.
+        publik&apos;s mission: free software for everyone.
+      </p>
+      <a className="pk-pitch-cta" href="https://publikhq.com" target="_blank" rel="noopener noreferrer">Make a free publik account →</a>
+    </div>
   );
 }
 
@@ -247,6 +262,7 @@ const CSS = `
 .pk-app{margin:0 0 16px;font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--pk-muted)}
 .pk-title{margin:0 0 8px;font-family:var(--publik-display-font,inherit);font-size:26px;line-height:1.15;font-weight:700;letter-spacing:-.015em}
 .pk-body{margin:0;font-size:15px;line-height:1.55}
+.pk-pitch{margin-top:22px;padding-top:16px;border-top:1px solid color-mix(in srgb,currentColor 14%,transparent);font-size:13px;line-height:1.55;opacity:.85}.pk-pitch p{margin:0 0 10px}.pk-pitch a{color:inherit}.pk-pitch-cta{font-weight:600;text-decoration:none}
 .pk-note{display:flex;align-items:center;gap:8px;margin:14px 0 0;font-size:14px;line-height:1.45;color:var(--pk-muted)}
 .pk-buttons{display:flex;flex-direction:column;gap:8px;margin-top:24px}
 .pk-btn{box-sizing:border-box;display:flex;align-items:center;justify-content:center;min-height:46px;padding:10px 16px;border:1px solid transparent;border-radius:12px;font:inherit;font-size:15px;font-weight:600;text-decoration:none;cursor:pointer;transition:opacity .15s,background-color .15s}

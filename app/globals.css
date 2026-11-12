@@ -75,6 +75,16 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
+/* The landing page (app/page.tsx): the desk with faint ruled lines, like the cover image. */
+.landing-desk {
+  background-color: var(--desk);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 39px,
+    color-mix(in srgb, var(--line) 60%, transparent) 39px 40px
+  );
+}
+
 /* The drawing surface: the browser must not scroll, zoom, select or show a callout here. */
 .ink-surface {
   touch-action: none;
