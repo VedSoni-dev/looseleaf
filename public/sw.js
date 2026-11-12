@@ -1,9 +1,12 @@
 // Looseleaf service worker: keeps the app shell available offline. Notes themselves live in IndexedDB.
-const CACHE = "looseleaf-shell-v2";
+// v3: the app moved from / to /app (/ is now the public landing page). The new cache name drops v2's copy of /.
+const CACHE = "looseleaf-shell-v3";
+const SHELL = "/app";
+const PAGES = ["/", SHELL]; // the landing page and the app keep their own cached copies
 const SHELL_TIMEOUT = 4000;
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.add("/")).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.add(SHELL)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
@@ -36,19 +39,24 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
 
   if (request.mode === "navigate") {
-    // Fresh shell when online, cached shell when not.
-    // Only the app itself is the shell; opening /icon.svg in a tab must not replace it.
-    const isShell = url.pathname === "/";
+    // Fresh page when online, cached page when not.
+    // Only / and /app are kept; opening /icon.svg in a tab must not replace either. Anything else falls back to the app.
+    const page = PAGES.includes(url.pathname) ? url.pathname : null;
+    const isShell = page === SHELL;
     const network = fetch(request).then((res) => {
-      if (isShell && res.ok) {
+      if (page && res.ok && !res.redirected) {
         const copy = res.clone();
-        event.waitUntil(caches.open(CACHE).then((cache) => cache.put("/", copy)));
+        event.waitUntil(caches.open(CACHE).then((cache) => cache.put(page, copy)));
       }
       return res;
     });
-    const cached = () => caches.match("/").then((hit) => hit || Response.error());
-    // On a connection that never answers, fall back to the saved shell instead of hanging.
-    const slow = new Promise((resolve) => setTimeout(resolve, SHELL_TIMEOUT)).then(() => caches.match("/"));
+    const cached = () =>
+      caches
+        .match(page || SHELL)
+        .then((hit) => hit || caches.match(SHELL))
+        .then((hit) => hit || Response.error());
+    // On a connection that never answers, fall back to the saved app instead of hanging.
+    const slow = new Promise((resolve) => setTimeout(resolve, SHELL_TIMEOUT)).then(() => caches.match(SHELL));
     event.respondWith(
       isShell
         ? Promise.race([network.catch(() => undefined), slow]).then((res) => res || network.catch(cached))
