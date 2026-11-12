@@ -32,6 +32,19 @@
   }
 }
 
+/* Sign in with publik (components/PublikGate.tsx) in Looseleaf's colours. */
+:root {
+  --publik-bg: var(--desk);
+  --publik-card: var(--panel);
+  --publik-ink: var(--ink);
+  --publik-muted: var(--muted);
+  --publik-line: var(--line);
+  --publik-accent: var(--accent);
+  --publik-accent-ink: var(--accent-ink);
+  --publik-hover: var(--panel-2);
+  --publik-display-font: ui-serif, "New York", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
 @theme inline {
   --color-desk: var(--desk);
   --color-panel: var(--panel);

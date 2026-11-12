@@ -2,21 +2,9 @@
 
 import { ArrowUp, Copy, KeyRound, Plus, RotateCcw, Sparkles, Square, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
-import {
-  AIError,
-  DEFAULT_MODELS,
-  loadOwnKey,
-  loadPublikCard,
-  plainText,
-  publikStatus,
-  saveOwnKey,
-  streamChat,
-  turnOnPublik,
-  type ChatMsg,
-  type OwnKey,
-  type PublikCard,
-} from "@/lib/ai";
+import { AIError, DEFAULT_MODELS, loadOwnKey, plainText, saveOwnKey, streamChat, type ChatMsg, type OwnKey } from "@/lib/ai";
 import type { InkEngine } from "@/lib/engine";
+import { PublikChoice, usePublik } from "./PublikGate";
 
 export type AIAction = "transcribe" | "explain" | "solve" | "summarize" | "flashcards" | "quiz";
 
@@ -53,9 +41,13 @@ interface Failure {
   message: string;
   topUpUrl?: string;
   retry?: boolean;
+  /** "My own key" was chosen at Sign in with publik and no key is saved yet. */
+  needsKey?: boolean;
 }
 
-type View = "chat" | "consent" | "key";
+type View = "chat" | "key";
+
+const NEEDS_KEY = "Add your OpenAI or Anthropic API key to use AI, or switch to your publik plan.";
 
 const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<InkEngine | null>; onClose: () => void; onToast: (m: string) => void }>(
   function AIPanel({ open, engine, onClose, onToast }, ref) {
@@ -63,10 +55,6 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
     const [busy, setBusy] = useState(false);
     const [failure, setFailure] = useState<Failure | null>(null);
     const [view, setView] = useState<View>("chat");
-    const [disclosure, setDisclosure] = useState("");
-    const [available, setAvailable] = useState(true);
-    const [connecting, setConnecting] = useState(false);
-    const [card, setCard] = useState<PublikCard | null>(null);
     const [own, setOwn] = useState<OwnKey | null>(null);
     const [balance, setBalance] = useState<string | null>(null);
     const [draft, setDraft] = useState("");
@@ -76,11 +64,12 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
     const pending = useRef<ChatMsg[] | null>(null);
     const sending = useRef(false); // set before the first await, so a double tap cannot send twice
     const scroller = useRef<HTMLDivElement>(null);
+    // The choice made at Sign in with publik (changed in AI settings): their publik plan, or their own key.
+    const viaPublik = usePublik().choice === "publik";
 
     useEffect(() => {
       // Read once after mount: localStorage does not exist during server rendering.
       queueMicrotask(() => {
-        setCard(loadPublikCard());
         const saved = loadOwnKey();
         setOwn(saved);
         if (saved) setForm(saved);
@@ -107,6 +96,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
             text += delta;
             setMsgs([...thread, { role: "assistant", text }]);
           },
+          viaPublik,
           controller.signal,
         );
         if (result.balance) setBalance(result.balance);
@@ -117,10 +107,11 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       } catch (e) {
         if ((e as Error).name === "AbortError") {
           setMsgs(text ? [...thread, { role: "assistant", text }] : thread);
-        } else if (e instanceof AIError && e.code === "needs_consent") {
+        } else if (e instanceof AIError && e.code === "needs_key") {
           setMsgs(thread);
           pending.current = thread;
-          askConsent();
+          setFailure({ message: NEEDS_KEY, retry: true, needsKey: true });
+          setView("key");
         } else {
           setMsgs(text ? [...thread, { role: "assistant", text }] : thread);
           const err = e instanceof AIError ? e : null;
@@ -136,40 +127,17 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       }
     };
 
-    const askConsent = async () => {
-      try {
-        const status = await publikStatus();
-        setDisclosure(status.disclosure);
-        setAvailable(status.available);
-        if (status.connected && pending.current) {
-          const thread = pending.current;
-          pending.current = null;
-          return run(thread);
-        }
-      } catch {
-        setAvailable(false);
-      }
-      setView("consent");
-    };
-
-    /** Sends the thread if a provider is ready; otherwise parks it behind the consent card. */
-    const submit = async (thread: ChatMsg[]) => {
+    /** Sends the thread on the publik plan or the person's own key; with neither, parks it behind the key form. */
+    const submit = (thread: ChatMsg[]) => {
       if (sending.current) return;
       sending.current = true;
       setFailure(null);
       setMsgs(thread);
-      if (loadOwnKey()) return run(thread);
-      try {
-        const status = await publikStatus();
-        if (status.connected) return run(thread);
-        setDisclosure(status.disclosure);
-        setAvailable(status.available);
-      } catch {
-        setAvailable(false);
-      }
+      if (viaPublik || loadOwnKey()) return run(thread);
       pending.current = thread;
       sending.current = false;
-      setView("consent");
+      setFailure({ message: NEEDS_KEY, retry: true, needsKey: true });
+      setView("key");
     };
 
     const begin = (text: string, label: string, source: "page" | "selection") => {
@@ -200,24 +168,6 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       setDraft("");
       if (msgs.length === 0) begin(text, text, "page");
       else submit([...msgs, { role: "user", text }]);
-    };
-
-    const accept = async () => {
-      setConnecting(true);
-      setFailure(null);
-      try {
-        setCard(await turnOnPublik());
-        const thread = pending.current;
-        pending.current = null;
-        setView("chat");
-        if (thread) run(thread);
-      } catch (e) {
-        setAvailable(false);
-        setFailure({ message: e instanceof Error ? e.message : "publik API could not be set up. Use your own key for now." });
-        setView("key");
-      } finally {
-        setConnecting(false);
-      }
     };
 
     const saveKey = () => {
@@ -264,7 +214,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
               <Plus size={15} /> New
             </button>
           )}
-          <button onClick={() => setView(view === "key" ? "chat" : "key")} aria-label="AI key settings" aria-pressed={view === "key"} className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-panel-2 hover:text-ink">
+          <button onClick={() => setView(view === "key" ? "chat" : "key")} aria-label="AI settings" aria-pressed={view === "key"} className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-panel-2 hover:text-ink">
             <KeyRound size={16} />
           </button>
           <button onClick={onClose} aria-label="Close AI panel" className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-panel-2 hover:text-ink">
@@ -274,44 +224,53 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
         <div ref={scroller} className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4" style={{ userSelect: "text", WebkitUserSelect: "text" }}>
           {view === "key" ? (
-            <div className="space-y-3">
-              <h3 className="font-serif text-xl font-semibold">Use your own key</h3>
-              <p className="text-sm leading-relaxed text-muted">
-                Paste an API key from OpenAI or Anthropic and AI calls are billed to you directly. A ChatGPT or Claude subscription is not an API key and won&apos;t work here.
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {(["openai", "anthropic"] as const).map((kind) => (
-                  <button
-                    key={kind}
-                    onClick={() => setForm({ ...form, kind, model: DEFAULT_MODELS[kind] })}
-                    className={`h-11 rounded-xl border text-sm font-medium ${form.kind === kind ? "border-accent bg-accent-soft text-accent" : "border-line hover:bg-panel-2"}`}
-                  >
-                    {kind === "openai" ? "OpenAI" : "Anthropic"}
+            <div className="space-y-5">
+              {failure?.needsKey && (
+                <p role="status" className="rounded-2xl border border-line bg-panel-2 p-4 text-sm leading-relaxed">
+                  {failure.message}
+                </p>
+              )}
+              <PublikChoice />
+              <div className="space-y-3 border-t border-line pt-5">
+                <h3 className="font-serif text-xl font-semibold">Use your own key</h3>
+                <p className="text-sm leading-relaxed text-muted">
+                  Paste an API key from OpenAI or Anthropic and AI calls are billed to you directly. A ChatGPT or Claude subscription is not an API key and won&apos;t work here.
+                  {viaPublik && " A key saved here is used when you pick My own key above."}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["openai", "anthropic"] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      onClick={() => setForm({ ...form, kind, model: DEFAULT_MODELS[kind] })}
+                      className={`h-11 rounded-xl border text-sm font-medium ${form.kind === kind ? "border-accent bg-accent-soft text-accent" : "border-line hover:bg-panel-2"}`}
+                    >
+                      {kind === "openai" ? "OpenAI" : "Anthropic"}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  placeholder={form.kind === "openai" ? "sk-…" : "sk-ant-…"}
+                  aria-label="API key"
+                  value={form.key}
+                  onChange={(e) => setForm({ ...form, key: e.target.value })}
+                  className={field}
+                />
+                <input aria-label="Model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={field} />
+                <p className="text-xs leading-relaxed text-muted">
+                  The key stays in this browser. Each request passes it through Looseleaf&apos;s server straight to your provider; it is never stored or logged there.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button onClick={saveKey} disabled={!form.key.trim()} className="h-11 flex-1 rounded-full bg-accent text-sm font-semibold text-accent-ink disabled:opacity-40">
+                    Save key
                   </button>
-                ))}
-              </div>
-              <input
-                type="password"
-                autoComplete="off"
-                placeholder={form.kind === "openai" ? "sk-…" : "sk-ant-…"}
-                aria-label="API key"
-                value={form.key}
-                onChange={(e) => setForm({ ...form, key: e.target.value })}
-                className={field}
-              />
-              <input aria-label="Model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={field} />
-              <p className="text-xs leading-relaxed text-muted">
-                The key stays in this browser. Each request passes it through Looseleaf&apos;s server straight to your provider; it is never stored or logged there.
-              </p>
-              <div className="flex gap-2 pt-1">
-                <button onClick={saveKey} disabled={!form.key.trim()} className="h-11 flex-1 rounded-full bg-accent text-sm font-semibold text-accent-ink disabled:opacity-40">
-                  Save key
-                </button>
-                {own && (
-                  <button onClick={removeKey} className="h-11 rounded-full border border-line px-4 text-sm font-medium text-danger hover:bg-panel-2">
-                    Remove
-                  </button>
-                )}
+                  {own && (
+                    <button onClick={removeKey} className="h-11 rounded-full border border-line px-4 text-sm font-medium text-danger hover:bg-panel-2">
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
@@ -370,32 +329,13 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
                 ),
               )}
 
-              {view === "consent" && (
-                <div className="rise space-y-3 rounded-2xl border border-line bg-panel-2 p-4">
-                  <h3 className="font-serif text-lg font-semibold">Turn on AI</h3>
-                  {available ? (
-                    <>
-                      <p className="text-sm leading-relaxed">{disclosure}</p>
-                      <button onClick={accept} disabled={connecting} className="h-11 w-full rounded-full bg-accent text-sm font-semibold text-accent-ink disabled:opacity-60">
-                        {connecting ? "Setting up…" : "Turn on AI"}
-                      </button>
-                    </>
-                  ) : (
-                    <p className="text-sm leading-relaxed">Free AI credit isn&apos;t set up on this copy of Looseleaf yet. You can use your own API key in the meantime.</p>
-                  )}
-                  <button onClick={() => setView("key")} className="h-11 w-full rounded-full border border-line bg-panel text-sm font-medium hover:bg-panel-2">
-                    Use my own key
-                  </button>
-                </div>
-              )}
-
               {failure && (
                 <div role="alert" className="rise space-y-2.5 rounded-2xl border border-line bg-panel-2 p-4 text-sm">
                   <p className="leading-relaxed">{failure.message}</p>
                   <div className="flex flex-wrap gap-2">
                     {failure.topUpUrl && (
-                      <a href={failure.topUpUrl} target="_blank" rel="noreferrer" className="flex h-9 items-center rounded-full bg-accent px-3.5 font-semibold text-accent-ink">
-                        Open publik
+                      <a href={failure.topUpUrl} target="_blank" rel="noopener noreferrer" className="flex h-9 items-center rounded-full bg-accent px-3.5 font-semibold text-accent-ink">
+                        Top up on publik
                       </a>
                     )}
                     {failure.retry && lastUser && (
@@ -412,30 +352,12 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
         {view !== "key" && (
           <footer className="border-t border-line px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5">
-            {(own || card) && (
-              <div className="mb-2 flex items-center gap-2 px-1 text-xs text-muted">
-                {own ? (
-                  <span className="flex-1 truncate">Using your {own.kind === "openai" ? "OpenAI" : "Anthropic"} key · {own.model}</span>
-                ) : card ? (
-                  <>
-                    <span className="flex-1">
-                      <span className="block truncate">publik API{balance ? ` · balance ${balance}` : card.balance_line ? ` · ${card.balance_line}` : ""}</span>
-                      {card.cost_sentence && <span className="block">{card.cost_sentence}</span>}
-                    </span>
-                    {card.claim_state === "claimed"
-                      ? card.add_credit_url && (
-                          <a href={card.add_credit_url} target="_blank" rel="noreferrer" className="shrink-0 font-semibold text-accent">
-                            Add a plan or pack
-                          </a>
-                        )
-                      : card.claim_url && (
-                          <a href={card.claim_url} target="_blank" rel="noreferrer" className="shrink-0 font-semibold text-accent">
-                            Sign in with publik
-                          </a>
-                        )}
-                  </>
-                ) : null}
-              </div>
+            {(viaPublik || own) && (
+              <p className="mb-2 truncate px-1 text-xs text-muted">
+                {viaPublik
+                  ? `publik plan${balance ? ` · balance ${balance}` : ""}`
+                  : own && `Using your ${own.kind === "openai" ? "OpenAI" : "Anthropic"} key · ${own.model}`}
+              </p>
             )}
             <div className="flex items-end gap-2">
               <textarea

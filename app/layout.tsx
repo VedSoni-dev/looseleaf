@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { PublikGate } from "@/components/PublikGate";
 
 export const metadata: Metadata = {
   title: "Looseleaf — handwritten notes, free, in your browser",
@@ -25,7 +26,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="h-full">{children}</body>
+      <body className="h-full">
+        <PublikGate appName="Looseleaf">{children}</PublikGate>
+      </body>
     </html>
   );
 }

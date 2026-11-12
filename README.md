@@ -4,7 +4,7 @@
 
 # Looseleaf
 
-**Handwritten notes for iPad and Apple Pencil, right in the browser. Free, no account, no notebook limit.**
+**Handwritten notes for iPad and Apple Pencil, right in the browser. Free, no notebook limit, and your notes stay on your device.**
 
 **[Open Looseleaf](https://looseleaf-seven-green.vercel.app)** · nothing to install · MIT licensed · a free alternative to Goodnotes
 
@@ -30,12 +30,12 @@
 
 ## What you get
 
-- **No sign-up.** Open it and write. Notebooks are saved in your browser (IndexedDB).
+- **Sign in with publik, then write.** There is no Looseleaf account. Notebooks are saved in your browser (IndexedDB).
 - **Unlimited notebooks and pages**, no watermark on exports.
 - **Portable `.leaf` files.** Export a notebook, open it on any other device. The format is plain JSON (see below).
 - **Pencil-first input.** Pressure-sensitive ink, palm rejection, one-finger scroll and pinch zoom once a Pencil is detected. Works with a mouse or finger too. (This is v0.1: the Pencil handling has not had a tuning pass on a real iPad yet, so issues are very welcome.)
 - **AI that reads your handwriting.** Lasso some ink and convert it to text, have it explained, or get a maths problem solved. Ask questions about a whole page, make flashcards, get quizzed.
-- **Works offline** after the first visit (AI needs a connection). Add it to the iPad Home Screen for a full-screen app.
+- **Add it to the iPad Home Screen** for a full-screen app. Opening it needs a connection, because Sign in with publik checks in each time; your notes themselves never leave the device.
 
 ## Compared with Goodnotes
 
@@ -45,7 +45,7 @@ Goodnotes is a polished native app with years of features. Looseleaf is a small,
 |---|---|---|
 | Price | Free, open source (MIT) | Free plan; Essential $11.99/year; Pro $35.99/year; one-time Special Edition on Apple devices |
 | Free limits | None: unlimited notebooks and pages | Free plan: 3 files, 3 folders, 5 MB imports, watermarked exports |
-| Account | None | Goodnotes account for Windows, Android and web libraries and for cloud features |
+| Account | Sign in with publik; no Looseleaf account, notes stay in your browser | Goodnotes account for Windows, Android and web libraries and for cloud features |
 | Where it runs | Any modern browser: iPad, Mac, PC, Android tablet | Native apps for iPad, iPhone and Mac, plus Android, Windows and web |
 | Handwriting | Pressure ink, highlighter, eraser, lasso (move, copy, delete), typed text, custom colours | All of that plus shapes, stickers, tape, elements and more |
 | Paper | Ruled, grid, dots, blank | Many paper templates and covers, plus template marketplace |
@@ -57,7 +57,7 @@ Goodnotes is a polished native app with years of features. Looseleaf is a small,
 | AI on your notes | Opt-in: pay-per-use via publik API, or your own OpenAI/Anthropic key | Goodnotes AI: limited on the free plan, more with Pro or the AI Pass add-on |
 | Where notes live | Only in your browser, unless you export | On device and in Goodnotes cloud |
 
-If you need PDF annotation, audio or sync today, Goodnotes does more. If you want a free notebook with no limits and no account, Looseleaf is for you.
+If you need PDF annotation, audio or sync today, Goodnotes does more. If you want a free notebook with no limits that keeps your notes on your device, Looseleaf is for you.
 
 ## Run it
 
@@ -68,18 +68,25 @@ npm run dev
 
 Then open http://localhost:3000. For a production build: `npm run build && npm start`.
 
+## Sign in and privacy
+
+Looseleaf opens with **Sign in with publik**, before the first screen. Your notebooks still live only in your browser; signing in does not upload them anywhere.
+
+To count its users, Looseleaf sends publik two events and nothing else: `app_opened` (once per browser session) and `active_session` (every 30 minutes while a tab is open). Each one carries the app's name and version, your operating system and a random ID for this browser, sent with this browser's publik key. No notes, pages, questions or answers. Browsers with Do Not Track or Global Privacy Control turned on are never counted.
+
 ## AI
 
-AI features go through [publik API](https://publikhq.com/developers), so users need no key: they press "Turn on AI", and linking a publik account gives a little free use. Anyone can instead paste their own OpenAI or Anthropic **API key** under the key icon in the AI panel; it is stored only in that browser. ChatGPT and Claude subscriptions are not API keys and cannot be used.
+AI features go through [publik API](https://publikhq.com/developers), so users need no key. After signing in, Looseleaf asks once how to pay for AI: connect your publik plan, or use your own OpenAI or Anthropic **API key**, pasted under the key icon in the AI panel and stored only in that browser. Change your mind any time under the same key icon. ChatGPT and Claude subscriptions are not API keys and cannot be used.
 
-Server environment variables (all optional):
+Server environment variables (all optional, but set `PUBLIK_COOKIE_SECRET` on any public deployment):
 
 | Name | Purpose |
 |---|---|
 | `PUBLIK_APP_TOKEN` | The app's public publik token. Overrides `publik-app-token.txt`. |
-| `PUBLIK_API_KEY` | Use one fixed publik key for every request (handy for local testing). |
-| `PUBLIK_API_BASE_URL` | Override the publik API base URL. |
-| `LOOSELEAF_HOSTED` | Set to `1` when you host this for other people anywhere but Vercel, so each visitor gets their own publik install (kept in a cookie) instead of sharing the server's. |
+| `PUBLIK_COOKIE_SECRET` | Seals each browser's publik key into its cookie. Changing it signs every browser out. |
+| `PUBLIK_API_KEY`, `PUBLIK_API_BASE_URL` | `npm run dev` only: one fixed publik key for every request (handy for local testing). Ignored in production. |
+| `DO_NOT_TRACK=1` or `PUBLIK_TELEMETRY=off` | Turn usage counting off for the whole server. |
+| `PUBLIK_SELF_TEST` | `npm run build && PUBLIK_SELF_TEST=1 npm start` prints `publik self-test: ok looseleaf <version>` and exits. Never set it on a deployment. |
 
 What is sent: only the page image (or the lassoed part) and your question, and only when you ask. Notes are never uploaded otherwise.
 
