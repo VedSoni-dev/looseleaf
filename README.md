@@ -32,6 +32,7 @@
 
 - **A public page, then the app.** The site's front page explains Looseleaf; **Open Looseleaf** takes you to the app at `/app`, where you sign in with publik and write. There is no Looseleaf account. Notebooks are saved in your browser (IndexedDB).
 - **Unlimited notebooks and pages**, no watermark on exports.
+- **Import a PDF and write on it.** Lecture slides, handouts, past papers: **Import PDF** in the library (or drop a PDF on it) makes a notebook with one page per PDF page; **Insert PDF pages** in the page menu adds a PDF into the notebook you are in. Pages are prepared on your device (nothing is uploaded), sharp enough to zoom on an iPad, and exported PDFs, `.leaf` files and AI questions all include them. Up to 300 pages and 100 MB per PDF; password-protected PDFs need the password removed first.
 - **Portable `.leaf` files.** Export a notebook, open it on any other device. The format is plain JSON (see below).
 - **Pencil-first input.** Pressure-sensitive ink, palm rejection, one-finger scroll and pinch zoom once a Pencil is detected. Works with a mouse or finger too. (This is v0.1: the Pencil handling has not had a tuning pass on a real iPad yet, so issues are very welcome.)
 - **AI that reads your handwriting.** Lasso some ink and convert it to text, have it explained, or get a maths problem solved. Ask questions about a whole page, make flashcards, get quizzed.
@@ -49,7 +50,7 @@ Goodnotes is a polished native app with years of features. Looseleaf is a small,
 | Where it runs | Any modern browser: iPad, Mac, PC, Android tablet | Native apps for iPad, iPhone and Mac, plus Android, Windows and web |
 | Handwriting | Pressure ink, highlighter, eraser, lasso (move, copy, delete), typed text, custom colours | All of that plus shapes, stickers, tape, elements and more |
 | Paper | Ruled, grid, dots, blank | Many paper templates and covers, plus template marketplace |
-| PDF import and annotation | Not yet | Yes |
+| PDF import and annotation | Yes: import a PDF (or insert its pages), write and highlight on it, export it back as PDF | Yes |
 | Audio recording | No | Yes (20 minutes on the free plan) |
 | Handwriting search | No | Yes |
 | Sync and collaboration | No cloud; move notebooks with `.leaf` files | Cloud sync; real-time collaboration on Pro |
@@ -57,7 +58,7 @@ Goodnotes is a polished native app with years of features. Looseleaf is a small,
 | AI on your notes | Opt-in: pay-per-use via publik API, or your own OpenAI/Anthropic key | Goodnotes AI: limited on the free plan, more with Pro or the AI Pass add-on |
 | Where notes live | Only in your browser, unless you export | On device and in Goodnotes cloud |
 
-If you need PDF annotation, audio or sync today, Goodnotes does more. If you want a free notebook with no limits that keeps your notes on your device, Looseleaf is for you.
+If you need audio recording, sync or deep PDF tools (links, text selection, searching PDF text) today, Goodnotes does more. If you want a free notebook with no limits that keeps your notes on your device, Looseleaf is for you.
 
 ## Run it
 
@@ -92,7 +93,7 @@ What is sent: only the page image (or the lassoed part) and your question, and o
 
 ## The `.leaf` format
 
-A `.leaf` file is one JSON object:
+A `.leaf` file is one JSON object. Pages imported from a PDF also carry a `bg` (the page image, its pixel size, fitted to the page width or height and pinned to the top), and the images themselves travel in a top-level `assets` map of data URLs (JPEG, PNG or WebP only, at most 8 MB each). Versions before 0.2 open such a file without the backgrounds.
 
 ```jsonc
 {
@@ -104,13 +105,15 @@ A `.leaf` file is one JSON object:
     {
       "id": "…",
       "paper": "ruled",            // blank | ruled | grid | dots
+      "bg": { "kind": "image", "ref": "a1b2c3", "w": 1632, "h": 918 }, // optional: an imported PDF page
       "items": [
         // pts is a flat list of x, y, pressure triples; a page is 816 × 1056 units
         { "id": "…", "type": "stroke", "tool": "pen", "color": "#1F1F1F", "size": 4, "real": true, "pts": [120, 200, 0.4, 121.5, 201, 0.5] },
         { "id": "…", "type": "text", "x": 100, "y": 300, "w": 420, "size": 18, "color": "#1F1F1F", "text": "Typed text" }
       ]
     }
-  ]
+  ],
+  "assets": { "a1b2c3": "data:image/jpeg;base64,…" } // optional: page images by ref
 }
 ```
 
@@ -122,10 +125,10 @@ Readers should skip item types they do not know.
 
 ## Not in this version
 
-PDF import and annotation, audio recording, real-time collaboration, handwriting search, shape snapping, accounts and cloud sync.
+Audio recording, real-time collaboration, handwriting search, searching or selecting text inside imported PDFs, shape snapping, accounts and cloud sync.
 
 ## Stack
 
-Next.js (App Router), TypeScript, Tailwind, [perfect-freehand](https://github.com/steveruizok/perfect-freehand) for stroke geometry, jsPDF for PDF export.
+Next.js (App Router), TypeScript, Tailwind, [perfect-freehand](https://github.com/steveruizok/perfect-freehand) for stroke geometry, jsPDF for PDF export, [PDF.js](https://mozilla.github.io/pdf.js/) (`pdfjs-dist`, pinned) for PDF import.
 
 MIT licensed.

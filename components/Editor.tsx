@@ -8,6 +8,7 @@ import {
   Copy,
   Eraser,
   FileDown,
+  FilePlus2,
   FileText,
   Hand,
   Highlighter,
@@ -25,10 +26,13 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AIPanel, { type AIAction, type AIPanelHandle } from "./AIPanel";
+import ImportProgress, { type ImportState } from "./ImportProgress";
+import { backgroundImage } from "@/lib/backgrounds";
 import { InkEngine, type EngineState, type TextEdit } from "@/lib/engine";
 import { SAVE_MESSAGES, exportLeaf, exportPDF, exportPNG, type SaveResult } from "@/lib/leaf";
+import { MAX_PDF_PAGES, PdfImportError, pdfToPages } from "@/lib/pdf";
 import { TEXT_FONT, TEXT_LINE, pageToCanvas } from "@/lib/render";
-import { getNotebook, saveNotebook } from "@/lib/store";
+import { deleteAssets, getNotebook, saveNotebook } from "@/lib/store";
 import { HIGHLIGHT_COLORS, HIGHLIGHT_SIZES, PEN_COLORS, PEN_SIZES, type Notebook, type Page, type Paper, type Tool } from "@/lib/types";
 
 const TOOLS: { tool: Tool; label: string; key: string; icon: React.ReactNode }[] = [
@@ -47,6 +51,8 @@ const PAPERS: { paper: Paper; label: string }[] = [
 ];
 
 const CUSTOM_KEY = "looseleaf.customColors";
+/** Same ceiling as a .leaf import (lib/leaf.ts). */
+const MAX_NOTEBOOK_PAGES = 2000;
 const RAINBOW = "conic-gradient(from 0deg, #f43f5e, #f59e0b, #facc15, #22c55e, #06b6d4, #6366f1, #d946ef, #f43f5e)";
 
 function loadCustom(): { pen: string; highlighter: string } {
@@ -88,6 +94,9 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const [aiOpen, setAiOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [importing, setImporting] = useState<ImportState | null>(null);
+  const pdfInput = useRef<HTMLInputElement>(null);
+  const importAbort = useRef<AbortController | null>(null);
 
   const flush = useCallback(async (commitText = false): Promise<boolean> => {
     // When leaving, text still being typed is part of the notebook: commit it before saving.
@@ -97,9 +106,12 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
     dirty.current = false;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     let thumb: string | undefined;
-    if (doc.pages[0] !== thumbPage.current) {
-      thumbPage.current = doc.pages[0];
-      thumb = pageToCanvas(doc.pages[0], 0.3).toDataURL("image/jpeg", 0.72);
+    const first = doc.pages[0];
+    // A PDF background not decoded yet would leave the thumbnail blank: keep the old one and retry next save.
+    const bgReady = !first.bg || !!backgroundImage(first.bg.ref);
+    if (first !== thumbPage.current && bgReady) {
+      thumbPage.current = first;
+      thumb = pageToCanvas(first, 0.3).toDataURL("image/jpeg", 0.72);
     }
     try {
       await saveNotebook(doc, thumb);
@@ -165,6 +177,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", onPageHide);
       scheme.removeEventListener("change", onScheme);
+      importAbort.current?.abort();
       flush(true);
       engine?.destroy();
       engineRef.current = null;
@@ -249,6 +262,36 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
       setToast("That export didn't work. Try again.");
     } finally {
       setBusy(null);
+    }
+  };
+
+  /** Inserts a PDF's pages after the current page. */
+  const insertPdf = async (file: File) => {
+    const engine = engineRef.current;
+    const doc = docRef.current;
+    if (!engine || !doc || importAbort.current) return;
+    const room = Math.min(MAX_PDF_PAGES, MAX_NOTEBOOK_PAGES - doc.pages.length);
+    if (room <= 0) {
+      setToast(`This notebook has the most pages one can hold (${MAX_NOTEBOOK_PAGES}).`);
+      return;
+    }
+    const controller = new AbortController();
+    importAbort.current = controller;
+    setImporting({ name: file.name, done: 0, total: 0 });
+    try {
+      const { pages } = await pdfToPages(file, (p) => setImporting({ name: file.name, ...p }), controller.signal, room);
+      if (engineRef.current !== engine) {
+        // The editor closed while importing: nothing will save these pages, so drop their images.
+        await deleteAssets(pages.map((p) => p.bg!.ref)).catch(() => {});
+        return;
+      }
+      engine.insertPages(pages);
+      setToast(`Added ${pages.length} ${pages.length === 1 ? "page" : "pages"}.`);
+    } catch (e) {
+      if ((e as Error)?.name !== "AbortError") setToast(e instanceof PdfImportError ? e.message : "That PDF couldn't be added.");
+    } finally {
+      importAbort.current = null;
+      setImporting(null);
     }
   };
 
@@ -390,6 +433,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
             </div>
             <Divider />
             <Row icon={<Plus size={16} />} label="Add page after this one" onClick={() => { engineRef.current?.addPage(); setMenu(false); }} />
+            <Row icon={<FilePlus2 size={16} />} label="Insert PDF pages after this one" onClick={() => { setMenu(false); pdfInput.current?.click(); }} />
             <Row icon={<Trash2 size={16} />} label={es.pageCount > 1 ? "Delete this page" : "Clear this page"} onClick={() => { engineRef.current?.deletePage(); setMenu(false); }} />
             <Divider />
             <Row
@@ -517,6 +561,20 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
           </button>
         </div>
       )}
+
+      <input
+        ref={pdfInput}
+        type="file"
+        accept="application/pdf,.pdf"
+        hidden
+        data-testid="insert-pdf-input"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void insertPdf(file);
+        }}
+      />
+      {importing && <ImportProgress state={importing} onCancel={() => importAbort.current?.abort()} />}
 
       <AIPanel ref={aiRef} open={aiOpen} engine={engineRef} onClose={() => setAiOpen(false)} onToast={setToast} />
 

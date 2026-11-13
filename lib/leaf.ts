@@ -1,6 +1,8 @@
 // .leaf files: a whole notebook as plain JSON, so it opens anywhere Looseleaf runs.
+import { prepareBackground } from "./backgrounds";
 import { pageToCanvas } from "./render";
-import { COVERS, PAGE_H, PAGE_W, uid, type Item, type Notebook, type Page, type Paper } from "./types";
+import { assetRefs, deleteAssets, getAsset, putAsset } from "./store";
+import { COVERS, PAGE_H, PAGE_W, uid, type Item, type Notebook, type Page, type PageBackground, type Paper } from "./types";
 
 const COLOR = /^#[0-9a-f]{3,8}$/i;
 const PAPERS: Paper[] = ["blank", "ruled", "grid", "dots"];
@@ -45,8 +47,71 @@ function cleanItem(raw: unknown): Item | null {
   return null; // item types from a newer version are skipped rather than crashing
 }
 
+// ---------- background images in .leaf files ----------
+//
+// A .leaf file carries its page images (imported PDF pages) in a top-level "assets" map of
+// ref -> data URL, so the file opens anywhere. Older Looseleaf versions ignore the map (and the
+// pages' "bg"), so they still open such a file, without the backgrounds.
+
+/** Per image. A 2x page from a PDF import is well under 1 MB. */
+export const MAX_ASSET_BYTES = 8 * 1024 * 1024;
+const ASSET_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+const DATA_URL = /^data:(image\/(?:jpeg|png|webp));base64,/;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/** Checks the file's first bytes really are the image type it claims. */
+function magicMatches(type: string, b: Uint8Array): boolean {
+  if (type === "image/jpeg") return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (type === "image/png") return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+  // RIFF....WEBP
+  return b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
+}
+
+/** A data URL from an untrusted file, as an image Blob, or null when it is anything else or too big. */
+export function decodeAsset(value: unknown): Blob | null {
+  if (typeof value !== "string") return null;
+  const m = DATA_URL.exec(value.slice(0, 40));
+  if (!m || !(ASSET_TYPES as readonly string[]).includes(m[1])) return null;
+  const b64 = value.slice(m[0].length);
+  if (b64.length < 16 || b64.length > Math.ceil(MAX_ASSET_BYTES / 3) * 4 || b64.length % 4 !== 0 || !BASE64.test(b64)) return null;
+  let bin: string;
+  try {
+    bin = atob(b64);
+  } catch {
+    return null;
+  }
+  if (bin.length > MAX_ASSET_BYTES) return null;
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (!magicMatches(m[1], bytes)) return null;
+  return new Blob([bytes], { type: m[1] });
+}
+
+const REF = /^[A-Za-z0-9_-]{1,64}$/;
+
+function cleanBackground(raw: unknown): PageBackground | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind !== "image" || typeof r.ref !== "string" || !REF.test(r.ref)) return null;
+  const w = num(r.w, 0, 0, 20000);
+  const h = num(r.h, 0, 0, 20000);
+  if (w < 1 || h < 1) return null;
+  return { kind: "image", ref: r.ref, w, h };
+}
+
+export interface ParsedLeaf {
+  notebook: Notebook;
+  /** Images by the refs the notebook's pages use, already validated. */
+  assets: Map<string, Blob>;
+}
+
 /** Reads untrusted file text into a notebook. Throws an Error with a message fit to show the user. */
 export function parseLeaf(text: string): Notebook {
+  return parseLeafWithAssets(text).notebook;
+}
+
+/** Like parseLeaf, plus the background images the file carries. Pages whose image is missing or invalid lose just their background. */
+export function parseLeafWithAssets(text: string): ParsedLeaf {
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(text);
@@ -59,17 +124,31 @@ export function parseLeaf(text: string): Notebook {
   if (typeof raw.version === "number" && raw.version > 1) {
     throw new Error("This notebook was saved by a newer Looseleaf. Reload the app to update, then try again.");
   }
+  const rawAssets = raw.assets && typeof raw.assets === "object" && !Array.isArray(raw.assets) ? (raw.assets as Record<string, unknown>) : {};
+  const assets = new Map<string, Blob>();
+  const rejected = new Set<string>();
   const pages: Page[] = (raw.pages as unknown[]).slice(0, 2000).map((p) => {
     const page = (p ?? {}) as Record<string, unknown>;
     const items = Array.isArray(page.items) ? page.items.map(cleanItem).filter((i): i is Item => !!i) : [];
-    return {
+    const out: Page = {
       id: uid(), // page ids are internal; fresh ones rule out duplicates in a hand-edited file
       paper: PAPERS.includes(page.paper as Paper) ? (page.paper as Paper) : "ruled",
       items,
     };
+    const bg = cleanBackground(page.bg);
+    if (bg && !rejected.has(bg.ref)) {
+      let blob = assets.get(bg.ref) ?? null;
+      if (!blob && Object.prototype.hasOwnProperty.call(rawAssets, bg.ref)) {
+        blob = decodeAsset(rawAssets[bg.ref]);
+        if (blob) assets.set(bg.ref, blob);
+        else rejected.add(bg.ref);
+      }
+      if (blob) out.bg = bg;
+    }
+    return out;
   });
   const now = Date.now();
-  return {
+  const notebook: Notebook = {
     format: "looseleaf",
     version: 1,
     id: uid(), // always a fresh id: importing never overwrites a notebook already in this browser
@@ -78,6 +157,32 @@ export function parseLeaf(text: string): Notebook {
     createdAt: num(raw.createdAt, now, 0, 1e14),
     updatedAt: now,
     pages: pages.length ? pages : [{ id: uid(), paper: "ruled", items: [] }],
+  };
+  return { notebook, assets };
+}
+
+/**
+ * Parses a .leaf file and stores its background images under fresh refs (so a file can never
+ * overwrite images another notebook uses). Returns the notebook, ready to save.
+ */
+export async function importLeaf(text: string): Promise<Notebook> {
+  const { notebook, assets } = parseLeafWithAssets(text);
+  if (!assets.size) return notebook;
+  const fresh = new Map<string, string>();
+  try {
+    for (const [ref, blob] of assets) {
+      const next = uid();
+      await putAsset(next, blob);
+      fresh.set(ref, next);
+    }
+  } catch (e) {
+    await deleteAssets(fresh.values()).catch(() => {});
+    if ((e as Error)?.name === "QuotaExceededError") throw new Error("This browser is out of storage space for this notebook's pages.");
+    throw new Error("Couldn't store this notebook's page images in this browser.");
+  }
+  return {
+    ...notebook,
+    pages: notebook.pages.map((p) => (p.bg ? { ...p, bg: { ...p.bg, ref: fresh.get(p.bg.ref)! } } : p)),
   };
 }
 
@@ -129,12 +234,41 @@ export async function saveFile(blob: Blob, name: string, description: string): P
   return "downloaded";
 }
 
-export function exportLeaf(nb: Notebook): Promise<SaveResult> {
-  const blob = new Blob([JSON.stringify(nb)], { type: "application/json" });
-  return saveFile(blob, `${safeName(nb.title)}.leaf`, "Looseleaf notebook");
+function dataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * The notebook as a .leaf file, its page images embedded as data URLs. Built from Blob parts, one
+ * per image, so a long PDF never has to exist as a single giant string in memory.
+ */
+export async function leafBlob(nb: Notebook): Promise<Blob> {
+  const json = JSON.stringify(nb);
+  const refs = assetRefs(nb);
+  if (!refs.size) return new Blob([json], { type: "application/json" });
+  const parts: BlobPart[] = [json.slice(0, -1), ',"assets":{'];
+  let first = true;
+  for (const ref of refs) {
+    const blob = await getAsset(ref);
+    if (!blob) continue; // the page keeps its bg; importers drop a background with no image
+    parts.push(new Blob([`${first ? "" : ","}${JSON.stringify(ref)}:"`, await dataUrl(blob), '"']));
+    first = false;
+  }
+  parts.push("}}");
+  return new Blob(parts, { type: "application/json" });
+}
+
+export async function exportLeaf(nb: Notebook): Promise<SaveResult> {
+  return saveFile(await leafBlob(nb), `${safeName(nb.title)}.leaf`, "Looseleaf notebook");
 }
 
 export async function exportPNG(nb: Notebook, pageIndex: number): Promise<SaveResult> {
+  await prepareBackground(nb.pages[pageIndex]);
   const canvas = pageToCanvas(nb.pages[pageIndex], 2);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!blob) throw new Error("Could not render that page.");
@@ -148,6 +282,8 @@ export async function exportPDF(nb: Notebook): Promise<SaveResult> {
   const pdf = new jsPDF({ unit: "pt", format: [w, h], compress: true });
   for (let i = 0; i < nb.pages.length; i++) {
     if (i > 0) pdf.addPage([w, h]);
+    // Decoded one page at a time (lib/backgrounds.ts keeps only a few), so a long PDF stays within iPad memory.
+    await prepareBackground(nb.pages[i]);
     const canvas = pageToCanvas(nb.pages[i], 2);
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, w, h);
     canvas.width = 0; // hand the bitmap back now: iPad Safari has a small canvas memory budget

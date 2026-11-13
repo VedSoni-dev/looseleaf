@@ -1,11 +1,14 @@
 "use client";
 
-import { Copy, FileDown, FolderOpen, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Copy, FileDown, FileUp, FolderOpen, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { openNotebook } from "./App";
-import { SAVE_MESSAGES, exportLeaf, parseLeaf } from "@/lib/leaf";
+import ImportProgress, { type ImportState } from "./ImportProgress";
+import { prepareBackground } from "@/lib/backgrounds";
+import { SAVE_MESSAGES, exportLeaf, importLeaf } from "@/lib/leaf";
+import { isPdfFile, pdfTitle, pdfToPages } from "@/lib/pdf";
 import { pageToCanvas } from "@/lib/render";
-import { deleteNotebook, formatBytes, getNotebook, listNotebooks, requestPersistence, saveNotebook, storageInfo } from "@/lib/store";
+import { deleteAssets, deleteNotebook, formatBytes, getNotebook, listNotebooks, requestPersistence, saveNotebook, storageInfo } from "@/lib/store";
 import { COVERS, newNotebook, uid, type Notebook, type NotebookMeta } from "@/lib/types";
 
 const FIRST_RUN = "looseleaf.seen";
@@ -20,6 +23,11 @@ function ago(t: number): string {
 }
 
 const thumbOf = (nb: Notebook) => pageToCanvas(nb.pages[0], 0.3).toDataURL("image/jpeg", 0.72);
+/** thumbOf, after decoding the first page's PDF background so it shows in the thumbnail. */
+const thumbFor = async (nb: Notebook) => {
+  await prepareBackground(nb.pages[0]);
+  return thumbOf(nb);
+};
 
 export function Logo({ size = 28 }: { size?: number }) {
   return (
@@ -41,6 +49,9 @@ export default function Library() {
   const [dragging, setDragging] = useState(false);
   const [storage, setStorage] = useState<{ used: number; persisted: boolean } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const pdfInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState<ImportState | null>(null);
+  const abort = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -96,17 +107,49 @@ export default function Library() {
     return () => clearTimeout(t);
   }, [notice]);
 
+  // Abandon an import in progress if the library goes away (e.g. the person navigates back).
+  useEffect(() => () => abort.current?.abort(), []);
+
+  /** A PDF becomes a new notebook named after the file, one page per PDF page. */
+  const importPdf = useCallback(async (file: File): Promise<string> => {
+    const controller = new AbortController();
+    abort.current = controller;
+    setImporting({ name: file.name, done: 0, total: 0 });
+    try {
+      const { pages, thumb } = await pdfToPages(file, (p) => setImporting({ name: file.name, ...p }), controller.signal);
+      const count = (await listNotebooks().catch(() => [])).length;
+      const nb = newNotebook(pdfTitle(file.name), COVERS[count % COVERS.length]);
+      nb.pages = pages;
+      try {
+        await saveNotebook(nb, thumb);
+      } catch (e) {
+        await deleteAssets(pages.map((p) => p.bg!.ref)).catch(() => {});
+        throw e;
+      }
+      requestPersistence();
+      return nb.id;
+    } finally {
+      abort.current = null;
+      setImporting(null);
+    }
+  }, []);
+
   const importFiles = useCallback(
     async (files: FileList | File[]) => {
       let opened = 0;
       let lastId = "";
       for (const file of Array.from(files)) {
         try {
-          const nb = parseLeaf(await file.text());
-          await saveNotebook(nb, thumbOf(nb));
+          if (isPdfFile(file)) {
+            lastId = await importPdf(file);
+          } else {
+            const nb = await importLeaf(await file.text());
+            await saveNotebook(nb, await thumbFor(nb));
+            lastId = nb.id;
+          }
           opened++;
-          lastId = nb.id;
         } catch (e) {
+          if ((e as Error)?.name === "AbortError") break;
           setError(`${file.name}: ${e instanceof Error ? e.message : "could not be opened."}`);
         }
       }
@@ -116,7 +159,7 @@ export default function Library() {
         refresh();
       }
     },
-    [refresh],
+    [importPdf, refresh],
   );
 
   const rename = async (id: string, title: string) => {
@@ -132,7 +175,7 @@ export default function Library() {
     const nb = await getNotebook(id);
     if (!nb) return;
     const copy = { ...nb, id: uid(), title: `${nb.title} copy`, createdAt: Date.now(), updatedAt: Date.now() };
-    await saveNotebook(copy, thumbOf(copy));
+    await saveNotebook(copy, await thumbFor(copy));
     refresh();
   };
 
@@ -172,7 +215,7 @@ export default function Library() {
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
-        if (e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
+        if (e.dataTransfer.files.length && !abort.current) importFiles(e.dataTransfer.files);
       }}
     >
       {/* iOS greys out unknown extensions when `accept` is set, so the picker accepts anything and we validate. */}
@@ -186,19 +229,43 @@ export default function Library() {
           e.target.value = "";
         }}
       />
+      {/* PDF is a type iOS knows, so this picker can filter to it (Files, iCloud Drive, Google Drive…). */}
+      <input
+        ref={pdfInput}
+        type="file"
+        accept="application/pdf,.pdf"
+        multiple
+        hidden
+        data-testid="pdf-input"
+        onChange={(e) => {
+          if (e.target.files?.length) importFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
 
       <div className="mx-auto max-w-6xl px-5 pb-24 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8">
         <header className="flex items-center gap-3 py-2">
           <Logo />
           <span className="font-serif text-xl font-semibold tracking-tight">Looseleaf</span>
           <div className="flex-1" />
+          {/* On a phone-width screen these two are icon-only, so the header still fits in one row. */}
+          <button
+            onClick={() => pdfInput.current?.click()}
+            aria-label="Import PDF"
+            title="Import PDF"
+            className="flex h-10 w-10 items-center justify-center gap-2 rounded-full border border-line bg-panel text-sm font-medium hover:bg-panel-2 sm:w-auto sm:px-4"
+          >
+            <FileUp size={16} />
+            <span className="hidden sm:inline">Import PDF</span>
+          </button>
           <button
             onClick={() => fileInput.current?.click()}
-            className="flex h-10 items-center gap-2 rounded-full border border-line bg-panel px-4 text-sm font-medium hover:bg-panel-2"
+            aria-label="Open .leaf"
+            title="Open .leaf"
+            className="flex h-10 w-10 items-center justify-center gap-2 rounded-full border border-line bg-panel text-sm font-medium hover:bg-panel-2 sm:w-auto sm:px-4"
           >
             <FolderOpen size={16} />
             <span className="hidden sm:inline">Open .leaf</span>
-            <span className="sm:hidden">Open</span>
           </button>
           <button onClick={create} className="flex h-10 items-center gap-2 rounded-full bg-accent px-4 text-sm font-semibold text-accent-ink hover:opacity-90">
             <Plus size={17} strokeWidth={2.5} />
@@ -209,8 +276,8 @@ export default function Library() {
         <section className="mt-10 sm:mt-14">
           <h1 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">Your notebooks</h1>
           <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted">
-            Everything here is saved in this browser, with no account. Export a notebook as a <span className="font-medium text-ink">.leaf</span> file to open it on
-            any other device.
+            Everything here is saved in this browser, with no account. Import a PDF of lecture slides or a handout to write on it. Export a notebook as a{" "}
+            <span className="font-medium text-ink">.leaf</span> file to open it on any other device.
           </p>
         </section>
 
@@ -232,7 +299,9 @@ export default function Library() {
         ) : books.length === 0 ? (
           <div className="mt-12 rounded-3xl border border-dashed border-line px-6 py-16 text-center">
             <p className="font-serif text-2xl font-semibold">A clean desk.</p>
-            <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">Start a notebook, or drop a .leaf file anywhere on this page to pick up where you left off.</p>
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">
+              Start a notebook, import a PDF to annotate, or drop a .leaf file anywhere on this page to pick up where you left off.
+            </p>
             <button onClick={create} className="mt-6 inline-flex h-11 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink hover:opacity-90">
               <Plus size={17} strokeWidth={2.5} /> New notebook
             </button>
@@ -321,9 +390,11 @@ export default function Library() {
 
       {dragging && (
         <div className="pointer-events-none fixed inset-3 z-30 flex items-center justify-center rounded-3xl border-2 border-dashed border-accent bg-accent-soft/80">
-          <p className="font-serif text-2xl font-semibold">Drop to open</p>
+          <p className="font-serif text-2xl font-semibold">Drop a PDF or .leaf to open</p>
         </div>
       )}
+
+      {importing && <ImportProgress state={importing} onCancel={() => abort.current?.abort()} />}
 
       {notice && (
         <div role="status" className="rise fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-sm font-medium text-desk shadow-float">

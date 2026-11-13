@@ -26,13 +26,27 @@ export interface TextItem {
 
 export type Item = StrokeItem | TextItem;
 
+/**
+ * An image under the ink, e.g. one page of an imported PDF. The pixels live in IndexedDB keyed by
+ * `ref` (lib/store.ts), never in the notebook JSON, which is rewritten on every stroke.
+ * `w` and `h` are the image's pixel size; it is fitted into the page keeping its aspect ratio,
+ * centred across and pinned to the top, so a landscape slide leaves room for notes below it.
+ */
+export interface PageBackground {
+  kind: "image";
+  ref: string;
+  w: number;
+  h: number;
+}
+
 export interface Page {
   id: string;
   paper: Paper;
   items: Item[];
+  bg?: PageBackground;
 }
 
-/** This is exactly what a .leaf file contains. */
+/** This is what a .leaf file contains, plus an `assets` map of background images (see lib/leaf.ts). */
 export interface Notebook {
   format: "looseleaf";
   version: 1;

@@ -1,6 +1,7 @@
 // Turning notebook data into pixels. Shared by the editor, thumbnails, exports and AI snapshots.
 import { getStroke } from "perfect-freehand";
-import { PAGE_H, PAGE_W, type Item, type Page, type Paper, type StrokeItem, type TextItem } from "./types";
+import { backgroundImage, backgroundMissing, type BackgroundImage } from "./backgrounds";
+import { PAGE_H, PAGE_W, type Item, type Page, type PageBackground, type Paper, type StrokeItem, type TextItem } from "./types";
 
 export const PAPER_COLOR = "#FFFDF8";
 export const TEXT_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
@@ -214,13 +215,53 @@ export function drawPaper(ctx: CanvasRenderingContext2D, paper: Paper) {
   }
 }
 
-/** Draws a whole page in page units. The caller sets the transform. */
-export function renderPage(ctx: CanvasRenderingContext2D, page: Page, skip?: Set<string>, clip?: Box) {
+/**
+ * Where a background image sits on the page: scaled to fit with its aspect ratio kept, centred
+ * across, pinned to the top. A landscape slide fills the width and leaves the lower part of the page
+ * for notes; a portrait page of another size (A4, say) fills the height with narrow side margins.
+ */
+export function backgroundRect(bg: Pick<PageBackground, "w" | "h">): Box {
+  const s = Math.min(PAGE_W / bg.w, PAGE_H / bg.h);
+  const w = bg.w * s;
+  const h = bg.h * s;
+  return { x: (PAGE_W - w) / 2, y: 0, w, h };
+}
+
+export function drawBackgroundImage(ctx: CanvasRenderingContext2D, bg: Pick<PageBackground, "w" | "h">, img: CanvasImageSource) {
+  const r = backgroundRect(bg);
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+
+/**
+ * Draws the page's background image if it is decoded. Returns false while it is still loading (a
+ * faint placeholder is drawn instead), so the editor knows not to keep that bitmap.
+ */
+export function drawBackground(ctx: CanvasRenderingContext2D, page: Page, img?: BackgroundImage | null): boolean {
+  const bg = page.bg;
+  if (!bg) return true;
+  const ready = img ?? backgroundImage(bg.ref);
+  if (ready) {
+    drawBackgroundImage(ctx, bg, ready);
+    return true;
+  }
+  const r = backgroundRect(bg);
+  ctx.fillStyle = "rgba(60, 60, 70, 0.06)";
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  return backgroundMissing(bg.ref);
+}
+
+/** Draws a whole page in page units. The caller sets the transform. Returns false if the background is still loading. */
+export function renderPage(ctx: CanvasRenderingContext2D, page: Page, skip?: Set<string>, clip?: Box): boolean {
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, PAGE_W, PAGE_H);
   ctx.clip();
   drawPaper(ctx, page.paper);
+  const complete = drawBackground(ctx, page);
   for (const item of page.items) {
     if (skip?.has(item.id)) continue;
     if (clip) {
@@ -230,9 +271,13 @@ export function renderPage(ctx: CanvasRenderingContext2D, page: Page, skip?: Set
     drawItem(ctx, item);
   }
   ctx.restore();
+  return complete;
 }
 
-/** A page as an image. Used for thumbnails, PNG/PDF export and what the AI sees. */
+/**
+ * A page as an image. Used for thumbnails, PNG/PDF export and what the AI sees.
+ * For a page with a background, await prepareBackground(page) first (lib/backgrounds.ts).
+ */
 export function pageToCanvas(page: Page, scale: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(PAGE_W * scale);
@@ -243,8 +288,11 @@ export function pageToCanvas(page: Page, scale: number): HTMLCanvasElement {
   return canvas;
 }
 
-/** Just the given items, cropped tight, on plain paper. This is what a lasso sends to the AI. */
-export function itemsToCanvas(items: Item[], maxSide = 1400): HTMLCanvasElement | null {
+/**
+ * Just the given items, cropped tight, on plain paper. This is what a lasso sends to the AI.
+ * With `page`, that page's background (a PDF page, say) shows under the ink, so the AI sees what was annotated.
+ */
+export function itemsToCanvas(items: Item[], maxSide = 1400, page?: Page): HTMLCanvasElement | null {
   const b = unionBounds(items);
   if (!b) return null;
   const pad = 24;
@@ -259,6 +307,10 @@ export function itemsToCanvas(items: Item[], maxSide = 1400): HTMLCanvasElement 
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.scale(scale, scale);
   ctx.translate(pad - b.x, pad - b.y);
+  if (page?.bg) {
+    const img = backgroundImage(page.bg.ref);
+    if (img) drawBackgroundImage(ctx, page.bg, img);
+  }
   for (const item of items) drawItem(ctx, item);
   return canvas;
 }

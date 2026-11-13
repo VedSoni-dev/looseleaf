@@ -1,9 +1,11 @@
 {
   "name": "looseleaf",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-pdfjs-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-pdfjs-assets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -12,6 +14,7 @@
     "jspdf": "^4.2.1",
     "lucide-react": "^1.71.0",
     "next": "16.4.6",
+    "pdfjs-dist": "6.4.299",
     "perfect-freehand": "^1.2.3",
     "react": "19.3.0",
     "react-dom": "19.3.0"
