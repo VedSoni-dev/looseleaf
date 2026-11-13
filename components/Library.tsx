@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { openNotebook } from "./App";
 import ImportProgress, { type ImportState } from "./ImportProgress";
 import { prepareBackground } from "@/lib/backgrounds";
-import { SAVE_MESSAGES, exportLeaf, importLeaf } from "@/lib/leaf";
+import { MAX_LEAF_BYTES, SAVE_MESSAGES, exportLeaf, importLeaf } from "@/lib/leaf";
 import { isPdfFile, pdfTitle, pdfToPages } from "@/lib/pdf";
 import { pageToCanvas } from "@/lib/render";
-import { deleteAssets, deleteNotebook, formatBytes, getNotebook, listNotebooks, requestPersistence, saveNotebook, storageInfo } from "@/lib/store";
+import { collectAssets, deleteAssets, deleteNotebook, formatBytes, getNotebook, listNotebooks, requestPersistence, saveNotebook, storageInfo } from "@/lib/store";
 import { COVERS, newNotebook, uid, type Notebook, type NotebookMeta } from "@/lib/types";
 
 const FIRST_RUN = "looseleaf.seen";
@@ -110,6 +110,12 @@ export default function Library() {
   // Abandon an import in progress if the library goes away (e.g. the person navigates back).
   useEffect(() => () => abort.current?.abort(), []);
 
+  // Tidy up page images nothing uses any more (deleted PDF pages, an undone insert), once the shelf has settled.
+  useEffect(() => {
+    const t = setTimeout(() => void collectAssets().catch(() => {}), 4000);
+    return () => clearTimeout(t);
+  }, []);
+
   /** A PDF becomes a new notebook named after the file, one page per PDF page. */
   const importPdf = useCallback(async (file: File): Promise<string> => {
     const controller = new AbortController();
@@ -143,8 +149,14 @@ export default function Library() {
           if (isPdfFile(file)) {
             lastId = await importPdf(file);
           } else {
-            const nb = await importLeaf(await file.text());
-            await saveNotebook(nb, await thumbFor(nb));
+            if (file.size > MAX_LEAF_BYTES) throw new Error(`This file is too large to open here (over ${MAX_LEAF_BYTES / 1024 / 1024} MB).`);
+            const { notebook: nb, stored } = await importLeaf(await file.text());
+            try {
+              await saveNotebook(nb, await thumbFor(nb));
+            } catch {
+              await deleteAssets(stored).catch(() => {});
+              throw new Error("Couldn't save it in this browser (storage may be full or blocked).");
+            }
             lastId = nb.id;
           }
           opened++;

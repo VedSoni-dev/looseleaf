@@ -1,6 +1,6 @@
 // Decoded page background images, shared by the editor, thumbnails, exports and AI snapshots.
 // Pixels are stored compressed in IndexedDB; a decoded letter page at 2x is ~14 MB of RAM, so only a
-// handful stay decoded at once (least recently used goes first). Callers that render off screen
+// handful stay decoded at once (least recently used goes first, within a byte budget). Callers that render off screen
 // (exports, thumbnails, AI) await loadBackground() first; the editor draws what is ready and
 // re-renders when onBackgroundReady fires.
 import { getAsset } from "./store";
@@ -8,11 +8,20 @@ import type { Page } from "./types";
 
 export type BackgroundImage = ImageBitmap | HTMLImageElement;
 
-const MAX_DECODED = 6;
+/** Decoded pixels kept at once (RGBA bytes): ~7 letter pages or ~16 slides at 2x. At least two stay. */
+const DECODED_BUDGET = 96 * 1024 * 1024;
+const MIN_DECODED = 2;
+/** A load that failed for a reason other than the image being gone (a decode under memory pressure, a storage hiccup) is retried. */
+const RETRY_MS = 4000;
+const MAX_ATTEMPTS = 3;
 const decoded = new Map<string, BackgroundImage>(); // insertion order = recency
 const loading = new Map<string, Promise<BackgroundImage | null>>();
 const missing = new Set<string>();
+const failures = new Map<string, number>();
+const waiting = new Set<string>(); // failed once, retry scheduled
 const listeners = new Set<(ref: string) => void>();
+
+const bytesOf = (img: BackgroundImage) => img.width * img.height * 4;
 
 function release(img: BackgroundImage) {
   if ("close" in img) img.close();
@@ -22,9 +31,12 @@ function release(img: BackgroundImage) {
 function remember(ref: string, img: BackgroundImage) {
   decoded.delete(ref);
   decoded.set(ref, img);
-  while (decoded.size > MAX_DECODED) {
+  let total = 0;
+  for (const d of decoded.values()) total += bytesOf(d);
+  while (decoded.size > MIN_DECODED && total > DECODED_BUDGET) {
     const [oldest, old] = decoded.entries().next().value as [string, BackgroundImage];
     decoded.delete(oldest);
+    total -= bytesOf(old);
     release(old);
   }
 }
@@ -56,11 +68,11 @@ export function backgroundImage(ref: string): BackgroundImage | null {
     remember(ref, hit);
     return hit;
   }
-  if (!missing.has(ref)) void loadBackground(ref);
+  if (!missing.has(ref) && !loading.has(ref) && !waiting.has(ref)) void loadBackground(ref);
   return null;
 }
 
-/** true when this image could not be found or decoded; renderers then stop waiting for it. */
+/** true when this image is gone (or kept failing to decode); renderers then stop waiting for it. */
 export function backgroundMissing(ref: string): boolean {
   return missing.has(ref);
 }
@@ -77,12 +89,26 @@ export function loadBackground(ref: string): Promise<BackgroundImage | null> {
     job = (async () => {
       try {
         const blob = await getAsset(ref);
-        if (!blob) throw new Error("missing");
+        if (!blob) {
+          missing.add(ref);
+          return null;
+        }
         const img = await decode(blob);
+        failures.delete(ref);
         remember(ref, img);
         return img;
       } catch {
-        missing.add(ref);
+        const attempts = (failures.get(ref) ?? 0) + 1;
+        failures.set(ref, attempts);
+        if (attempts >= MAX_ATTEMPTS) missing.add(ref);
+        else {
+          // Try again a little later; the listeners' re-render asks for it then.
+          waiting.add(ref);
+          setTimeout(() => {
+            waiting.delete(ref);
+            for (const fn of listeners) fn(ref);
+          }, RETRY_MS);
+        }
         return null;
       } finally {
         loading.delete(ref);
@@ -94,9 +120,14 @@ export function loadBackground(ref: string): Promise<BackgroundImage | null> {
   return job;
 }
 
-/** Makes sure this page's background is decoded, so a synchronous render right after includes it. */
-export async function prepareBackground(page: Page | undefined): Promise<void> {
-  if (page?.bg) await loadBackground(page.bg.ref);
+/**
+ * Makes sure this page's background is decoded, so a synchronous render right after includes it.
+ * Returns false when the page has a background that could not be loaded.
+ */
+export async function prepareBackground(page: Page | undefined): Promise<boolean> {
+  if (!page?.bg) return true;
+  waiting.delete(page.bg.ref); // an explicit request (export, AI) retries at once
+  return !!(await loadBackground(page.bg.ref));
 }
 
 export function onBackgroundReady(fn: (ref: string) => void): () => void {
@@ -112,5 +143,6 @@ export function forgetBackgrounds(refs?: Iterable<string>) {
     if (img) release(img);
     decoded.delete(ref);
     missing.delete(ref);
+    failures.delete(ref);
   }
 }

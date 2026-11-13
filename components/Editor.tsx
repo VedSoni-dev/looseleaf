@@ -29,7 +29,7 @@ import AIPanel, { type AIAction, type AIPanelHandle } from "./AIPanel";
 import ImportProgress, { type ImportState } from "./ImportProgress";
 import { backgroundImage } from "@/lib/backgrounds";
 import { InkEngine, type EngineState, type TextEdit } from "@/lib/engine";
-import { SAVE_MESSAGES, exportLeaf, exportPDF, exportPNG, type SaveResult } from "@/lib/leaf";
+import { BG_FAILED, SAVE_MESSAGES, exportLeaf, exportPDF, exportPNG, type SaveResult } from "@/lib/leaf";
 import { MAX_PDF_PAGES, PdfImportError, pdfToPages } from "@/lib/pdf";
 import { TEXT_FONT, TEXT_LINE, pageToCanvas } from "@/lib/render";
 import { deleteAssets, getNotebook, saveNotebook } from "@/lib/store";
@@ -258,8 +258,8 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
     try {
       const message = SAVE_MESSAGES[await job(doc)];
       if (message) setToast(message);
-    } catch {
-      setToast("That export didn't work. Try again.");
+    } catch (e) {
+      setToast(e instanceof Error && e.message === BG_FAILED ? e.message : "That export didn't work. Try again.");
     } finally {
       setBusy(null);
     }

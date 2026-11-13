@@ -140,16 +140,27 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       setView("key");
     };
 
+    const preparing = useRef(false);
     const begin = async (text: string, label: string, source: "page" | "selection") => {
       const e = engine.current;
-      if (!e || busy || sending.current) return;
+      if (!e || busy || sending.current || preparing.current) return;
       if (source === "page" && e.currentPageIsEmpty()) {
         setMsgs([]);
         setFailure({ message: "This page is blank. Write something first, then ask." });
         return;
       }
       // Async because a PDF page's image may need decoding first, so the AI sees the slide under the ink.
-      const image = await (source === "selection" ? e.selectionImage() : e.pageImage()).catch(() => null);
+      // The guard stops a double tap from sending twice while that happens.
+      preparing.current = true;
+      let image: string | null;
+      try {
+        image = await (source === "selection" ? e.selectionImage() : e.pageImage());
+      } catch {
+        setFailure({ message: "Couldn't capture this page. Try again." });
+        return;
+      } finally {
+        preparing.current = false;
+      }
       if (!image) {
         setFailure({ message: "Nothing is selected. Circle some ink with the lasso first." });
         return;

@@ -14,6 +14,16 @@ const JPEG_QUALITY = 0.85;
 
 export class PdfImportError extends Error {}
 
+/**
+ * A fresh pdf.js worker for one import, terminated afterwards so its memory goes back to the
+ * device (and a crashed worker can't wedge later imports). The URL has to stay written out like
+ * this: Turbopack spots `new Worker(new URL(..., import.meta.url))` and emits the worker as its own
+ * hashed file under /_next/static, so it is cached with the app and works offline.
+ */
+function makeWorker(): Worker {
+  return new Worker(new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url), { type: "module" });
+}
+
 export interface PdfProgress {
   done: number;
   total: number;
@@ -35,17 +45,7 @@ function loadPdfJs(): Promise<PdfJs> {
     // The legacy build carries polyfills the modern one leaves out (Map.getOrInsertComputed and others)
     // that iPadOS Safari versions still in use lack.
     pdfjsPromise = import("pdfjs-dist/legacy/build/pdf.mjs")
-      .then((mod) => {
-        const pdfjs = mod as unknown as PdfJs;
-        if (!pdfjs.GlobalWorkerOptions.workerPort) {
-          // The bundler emits the worker as its own hashed file under /_next/static, so it is cached
-          // with the app and works offline after the first import.
-          pdfjs.GlobalWorkerOptions.workerPort = new Worker(new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url), {
-            type: "module",
-          });
-        }
-        return pdfjs;
-      })
+      .then((mod) => mod as unknown as PdfJs)
       .catch((e) => {
         pdfjsPromise = null;
         throw e;
@@ -93,6 +93,8 @@ export async function pdfToPages(
   const stored: string[] = [];
   const canvas = document.createElement("canvas");
   let loadingTask: import("pdfjs-dist").PDFDocumentLoadingTask | null = null;
+  let port: Worker | null = null;
+  let worker: import("pdfjs-dist").PDFWorker | null = null;
   try {
     const data = new Uint8Array(await file.arrayBuffer());
     // The PDF spec lets the header sit anywhere in the first 1 KB.
@@ -102,7 +104,14 @@ export async function pdfToPages(
     signal?.throwIfAborted();
     // Fonts, CMaps and wasm decoders, copied into public/ by scripts/copy-pdfjs-assets.mjs.
     const assets = `/pdfjs/${pdfjs.version}/`;
+    port = makeWorker();
+    const workerFailed = new Promise<never>((_, reject) => {
+      port!.addEventListener("error", () => reject(Object.assign(new Error("worker"), { name: "ChunkLoadError" })));
+    });
+    workerFailed.catch(() => {}); // only matters while racing the document load below
+    worker = new pdfjs.PDFWorker({ port: port as never, verbosity: pdfjs.VerbosityLevel.ERRORS });
     loadingTask = pdfjs.getDocument({
+      worker,
       data,
       enableXfa: false,
       cMapUrl: `${assets}cmaps/`,
@@ -110,15 +119,16 @@ export async function pdfToPages(
       wasmUrl: `${assets}wasm/`,
       iccUrl: `${assets}iccs/`,
       verbosity: pdfjs.VerbosityLevel.ERRORS,
-      // A hostile PDF can declare huge images; skip any above ~50 MP instead of exhausting memory.
-      maxImageSize: 50_000_000,
+      // A hostile PDF can declare huge images; skip any above 20 MP (80 MB decoded) instead of exhausting
+      // memory. Pages are rasterised at 4.5 MP at most, so nothing bigger would show anyway.
+      maxImageSize: 20_000_000,
     });
     // With a handler set, pdf.js asks it for the password instead of failing; turn that into an error.
     const task = loadingTask;
     const passwordHit = new Promise<never>((_, reject) => {
       task.onPassword = () => reject(Object.assign(new Error("password"), { name: "PasswordException" }));
     });
-    const doc = await Promise.race([loadingTask.promise, passwordHit]);
+    const doc = await Promise.race([loadingTask.promise, passwordHit, workerFailed]);
     const total = doc.numPages;
     if (total > maxPages) {
       throw new PdfImportError(
@@ -161,6 +171,7 @@ export async function pdfToPages(
       onProgress({ done: n, total });
       await tick(); // let the progress paint and the browser breathe between pages
     }
+    signal?.throwIfAborted(); // Cancel pressed during the last page still cancels
     if (!pages.length) throw new PdfImportError("This PDF has no pages.");
     return { pages, thumb };
   } catch (e) {
@@ -171,6 +182,8 @@ export async function pdfToPages(
     canvas.height = 0;
     // Destroying the loading task also frees the document and its data in the worker.
     if (loadingTask) await loadingTask.destroy().catch(() => {});
+    worker?.destroy();
+    port?.terminate();
   }
 }
 
