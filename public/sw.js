@@ -65,8 +65,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname.startsWith("/_next/static/")) {
-    // Hashed, immutable build files.
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/pdfjs/")) {
+    // Hashed, immutable build files, and the PDF reader's fonts and decoders (versioned paths).
     event.respondWith(
       caches.match(request).then(
         (hit) =>

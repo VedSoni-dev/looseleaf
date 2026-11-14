@@ -1,5 +1,6 @@
 // The ink engine: owns two canvases, the camera, pointer input, selection and undo.
 // React only renders chrome around it and calls the public methods.
+import { backgroundImage, onBackgroundReady, prepareBackground } from "./backgrounds";
 import {
   drawItem,
   drawStroke,
@@ -84,6 +85,9 @@ interface PageCache {
   scale: number;
   items: Item[];
   paper: Paper;
+  bg: Page["bg"];
+  /** false when it was drawn before its background image had loaded */
+  complete: boolean;
 }
 
 const ROW = PAGE_H + PAGE_GAP;
@@ -140,6 +144,7 @@ export class InkEngine {
   private accent = "#2F7D4F";
   private resizeObserver: ResizeObserver;
   private destroyed = false;
+  private stopBackgrounds: () => void;
 
   constructor(
     private base: HTMLCanvasElement,
@@ -164,6 +169,11 @@ export class InkEngine {
     overlay.addEventListener("gesturestart", this.onGesture as EventListener, { passive: false });
     overlay.addEventListener("gesturechange", this.onGesture as EventListener, { passive: false });
 
+    // A page image finished decoding: redraw so it replaces its placeholder.
+    this.stopBackgrounds = onBackgroundReady((ref) => {
+      if (this.doc.pages.some((p) => p.bg?.ref === ref)) this.renderAll();
+    });
+
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(overlay);
     this.resize();
@@ -175,6 +185,7 @@ export class InkEngine {
     cancelAnimationFrame(this.inertia);
     if (this.zoomTimer) clearTimeout(this.zoomTimer);
     this.resizeObserver.disconnect();
+    this.stopBackgrounds();
     const o = this.overlay;
     o.removeEventListener("pointerdown", this.onDown);
     o.removeEventListener("pointermove", this.onMove);
@@ -236,6 +247,17 @@ export class InkEngine {
     if (!next) return;
     this.undoStack.push(this.doc.pages);
     this.restore(next);
+  }
+
+  /** Adds pages (e.g. from a PDF) after the current one and scrolls to the first of them. */
+  insertPages(added: Page[]) {
+    if (!added.length) return;
+    const at = Math.min(this.pageIndex, this.doc.pages.length - 1);
+    this.selection = null;
+    const pages = this.doc.pages.slice();
+    pages.splice(at + 1, 0, ...added);
+    this.mutate(pages);
+    this.scrollToPage(at + 1);
   }
 
   addPage() {
@@ -315,19 +337,26 @@ export class InkEngine {
   }
 
   /** JPEG data URL of the lassoed items, for the AI. */
-  selectionImage(): string | null {
-    const canvas = itemsToCanvas(this.selectedItems());
+  async selectionImage(): Promise<string | null> {
+    const sel = this.selection;
+    const page = sel ? this.doc.pages[sel.page] : undefined;
+    const items = this.selectedItems();
+    await prepareBackground(page);
+    const canvas = itemsToCanvas(items, 1400, page);
     return canvas ? canvas.toDataURL("image/jpeg", 0.88) : null;
   }
 
-  /** JPEG data URL of the page in view, for the AI. */
-  pageImage(index = this.pageIndex): string | null {
+  /** JPEG data URL of the page in view (its PDF background included), for the AI. */
+  async pageImage(index = this.pageIndex): Promise<string | null> {
     const page = this.doc.pages[index];
-    return page ? pageToCanvas(page, 1.5).toDataURL("image/jpeg", 0.85) : null;
+    if (!page) return null;
+    await prepareBackground(page);
+    return pageToCanvas(page, 1.5).toDataURL("image/jpeg", 0.85);
   }
 
   currentPageIsEmpty(): boolean {
-    return (this.doc.pages[this.pageIndex]?.items.length ?? 0) === 0;
+    const page = this.doc.pages[this.pageIndex];
+    return !page || (page.items.length === 0 && !page.bg);
   }
 
   /** Drops typed text onto the page: under the selection if there is one, else near the top of the view. */
@@ -562,8 +591,8 @@ export class InkEngine {
     canvas.height = Math.round(PAGE_H * scale);
     const ctx = canvas.getContext("2d", { alpha: false })!;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    renderPage(ctx, page);
-    const cache = { canvas, scale, items: page.items, paper: page.paper };
+    const complete = renderPage(ctx, page);
+    const cache = { canvas, scale, items: page.items, paper: page.paper, bg: page.bg, complete };
     this.caches.set(page.id, cache);
     return cache;
   }
@@ -600,7 +629,13 @@ export class InkEngine {
 
       const lifted = this.lift && this.lift.page === i ? this.lift.ids : undefined;
       let cache = this.caches.get(page.id);
-      const fresh = !!cache && cache.items === page.items && cache.paper === page.paper;
+      // A bitmap drawn while its background was loading stays good only until the image is ready.
+      const fresh =
+        !!cache &&
+        cache.items === page.items &&
+        cache.paper === page.paper &&
+        cache.bg === page.bg &&
+        (cache.complete || !page.bg || !backgroundImage(page.bg.ref));
 
       if (!lifted && cacheable) {
         const scaleOk = !!cache && Math.abs(cache.scale - scale) < 1e-4;

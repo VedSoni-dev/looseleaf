@@ -140,15 +140,27 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       setView("key");
     };
 
-    const begin = (text: string, label: string, source: "page" | "selection") => {
+    const preparing = useRef(false);
+    const begin = async (text: string, label: string, source: "page" | "selection") => {
       const e = engine.current;
-      if (!e || busy || sending.current) return;
+      if (!e || busy || sending.current || preparing.current) return;
       if (source === "page" && e.currentPageIsEmpty()) {
         setMsgs([]);
         setFailure({ message: "This page is blank. Write something first, then ask." });
         return;
       }
-      const image = source === "selection" ? e.selectionImage() : e.pageImage();
+      // Async because a PDF page's image may need decoding first, so the AI sees the slide under the ink.
+      // The guard stops a double tap from sending twice while that happens.
+      preparing.current = true;
+      let image: string | null;
+      try {
+        image = await (source === "selection" ? e.selectionImage() : e.pageImage());
+      } catch {
+        setFailure({ message: "Couldn't capture this page. Try again." });
+        return;
+      } finally {
+        preparing.current = false;
+      }
       if (!image) {
         setFailure({ message: "Nothing is selected. Circle some ink with the lasso first." });
         return;
@@ -158,7 +170,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
 
     useImperativeHandle(ref, () => ({
       start(action, source) {
-        begin(ACTIONS[action].prompt, source === "selection" ? ACTIONS[action].label.replace(" page", "") : ACTIONS[action].label, source);
+        void begin(ACTIONS[action].prompt, source === "selection" ? ACTIONS[action].label.replace(" page", "") : ACTIONS[action].label, source);
       },
     }));
 
@@ -166,7 +178,7 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       const text = draft.trim();
       if (!text || busy || sending.current) return;
       setDraft("");
-      if (msgs.length === 0) begin(text, text, "page");
+      if (msgs.length === 0) void begin(text, text, "page");
       else submit([...msgs, { role: "user", text }]);
     };
 
