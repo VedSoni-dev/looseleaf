@@ -144,7 +144,8 @@ export async function deleteAssets(refs: Iterable<string>): Promise<void> {
 }
 
 /** Recently written images may belong to an import or an edit that has not saved its notebook yet. */
-const ORPHAN_GRACE_MS = 10 * 60 * 1000;
+// A day: long enough that another tab's undo of a page delete, or a long import, never loses its images.
+const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Deletes background images no notebook uses any more. Duplicated notebooks share images, so this

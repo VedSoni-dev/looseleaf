@@ -128,7 +128,15 @@ export async function pdfToPages(
     const passwordHit = new Promise<never>((_, reject) => {
       task.onPassword = () => reject(Object.assign(new Error("password"), { name: "PasswordException" }));
     });
-    const doc = await Promise.race([loadingTask.promise, passwordHit, workerFailed]);
+    // Cancel must work even while pdf.js is stuck opening or rendering a page, not only between pages.
+    const aborted = new Promise<never>((_, reject) => {
+      if (!signal) return;
+      const stop = () => reject(signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (signal.aborted) stop();
+      else signal.addEventListener("abort", stop, { once: true });
+    });
+    aborted.catch(() => {});
+    const doc = await Promise.race([loadingTask.promise, passwordHit, workerFailed, aborted]);
     const total = doc.numPages;
     if (total > maxPages) {
       throw new PdfImportError(
@@ -141,7 +149,7 @@ export async function pdfToPages(
     let thumb = "";
     for (let n = 1; n <= total; n++) {
       signal?.throwIfAborted();
-      const page = await doc.getPage(n);
+      const page = await Promise.race([doc.getPage(n), aborted, workerFailed]);
       const base = page.getViewport({ scale: 1 });
       const fit = Math.min(PAGE_W / base.width, PAGE_H / base.height);
       let scale = fit * RASTER;
@@ -153,13 +161,19 @@ export async function pdfToPages(
       const ctx = canvas.getContext("2d", { alpha: false })!;
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({
+      const render = page.render({
         canvas,
         canvasContext: ctx,
         viewport,
         background: "#FFFFFF",
         annotationMode: pdfjs.AnnotationMode.ENABLE, // draw filled-in form fields and stamps too
-      }).promise;
+      });
+      try {
+        await Promise.race([render.promise, aborted, workerFailed]);
+      } catch (e) {
+        render.cancel();
+        throw e;
+      }
       page.cleanup();
       const blob = await toJpeg(canvas);
       const ref = uid();

@@ -126,8 +126,15 @@ export function loadBackground(ref: string): Promise<BackgroundImage | null> {
  */
 export async function prepareBackground(page: Page | undefined): Promise<boolean> {
   if (!page?.bg) return true;
-  waiting.delete(page.bg.ref); // an explicit request (export, AI) retries at once
-  return !!(await loadBackground(page.bg.ref));
+  const ref = page.bg.ref;
+  waiting.delete(ref); // an explicit request (export, AI) retries at once
+  if (failures.has(ref)) {
+    // Gave up after decode failures (e.g. low memory), not because the image is gone: try again, and
+    // if it still fails the caller sees a failure instead of a silently blank page.
+    missing.delete(ref);
+    failures.delete(ref);
+  }
+  return !!(await loadBackground(ref));
 }
 
 export function onBackgroundReady(fn: (ref: string) => void): () => void {
