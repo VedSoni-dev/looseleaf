@@ -5,6 +5,24 @@ const SHELL = "/app";
 const PAGES = ["/", SHELL]; // the landing page and the app keep their own cached copies
 const SHELL_TIMEOUT = 4000;
 
+// After a pdf.js upgrade the app only asks for /pdfjs/<new version>/; drop cached files of any other version
+// so they don't sit in the offline cache forever (fonts, CMaps and decoders add up to several MB).
+function pruneOldPdfjs(cache, pathname) {
+  const match = pathname.match(/^\/pdfjs\/([^/]+)\//);
+  if (!match) return undefined;
+  const keep = `/pdfjs/${match[1]}/`;
+  return cache.keys().then((requests) =>
+    Promise.all(
+      requests
+        .filter((req) => {
+          const path = new URL(req.url).pathname;
+          return path.startsWith("/pdfjs/") && !path.startsWith(keep);
+        })
+        .map((req) => cache.delete(req)),
+    ),
+  );
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.add(SHELL)).then(() => self.skipWaiting()));
 });
@@ -74,7 +92,7 @@ self.addEventListener("fetch", (event) => {
           fetch(request).then((res) => {
             if (res.ok) {
               const copy = res.clone();
-              caches.open(CACHE).then((cache) => cache.put(request, copy));
+              caches.open(CACHE).then((cache) => cache.put(request, copy).then(() => pruneOldPdfjs(cache, url.pathname)));
             }
             return res;
           }),
