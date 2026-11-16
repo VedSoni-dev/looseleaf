@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { MODELS, resolveProvider, topUpUrlFrom402 } from "@/lib/publik";
+import { clientKey, takeToken } from "@/lib/ratelimit";
 
 export const maxDuration = 60;
 
@@ -35,6 +36,14 @@ function fail(status: number, message: string, extra: Record<string, unknown> = 
 }
 
 export async function POST(request: Request) {
+  const wait = takeToken(clientKey(request.headers));
+  if (wait !== null) {
+    return Response.json(
+      { error: { message: `That's a lot of questions in a row. Try again in ${wait < 60 ? `${wait} s` : `${Math.ceil(wait / 60)} min`}.`, code: "rate_limited" } },
+      { status: 429, headers: { "cache-control": "no-store", "retry-after": String(wait) } },
+    );
+  }
+
   let body: { messages?: InMessage[]; own?: OwnKey | null };
   try {
     body = await request.json();
