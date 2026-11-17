@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { openNotebook } from "./App";
 import ImportProgress, { type ImportState } from "./ImportProgress";
 import { prepareBackground } from "@/lib/backgrounds";
-import { MAX_LEAF_BYTES, SAVE_MESSAGES, exportLeaf, importLeaf } from "@/lib/leaf";
+import { SAVE_MESSAGES, exportLeaf, importLeaf, leafTooLarge } from "@/lib/leaf";
 import { isPdfFile, pdfTitle, pdfToPages } from "@/lib/pdf";
 import { pageToCanvas } from "@/lib/render";
 import { collectAssets, deleteAssets, deleteNotebook, formatBytes, getNotebook, listNotebooks, requestPersistence, saveNotebook, storageInfo } from "@/lib/store";
@@ -149,7 +149,8 @@ export default function Library() {
           if (isPdfFile(file)) {
             lastId = await importPdf(file);
           } else {
-            if (file.size > MAX_LEAF_BYTES) throw new Error(`This file is too large to open here (over ${MAX_LEAF_BYTES / 1024 / 1024} MB).`);
+            const tooLarge = leafTooLarge(file.size);
+            if (tooLarge) throw new Error(tooLarge);
             const { notebook: nb, stored } = await importLeaf(await file.text());
             try {
               await saveNotebook(nb, await thumbFor(nb));

@@ -206,8 +206,29 @@ export function parseLeafWithAssets(text: string): ParsedLeaf {
   return { notebook, assets };
 }
 
-/** Biggest .leaf file read into memory. A 300-page PDF notebook exports to roughly 150 MB. */
+/**
+ * Biggest .leaf file read into memory. Opening one holds the file text, the parsed JSON and one decoded
+ * image at a time, so peak memory is roughly 2-3x the file size. A 300-page PDF notebook (the PDF
+ * import limit) exports to roughly 150 MB.
+ */
 export const MAX_LEAF_BYTES = 400 * 1024 * 1024;
+/** iPad and iPhone Safari kill a tab well before a desktop browser does, so touch devices get a lower cap. */
+export const MAX_LEAF_BYTES_TOUCH = 200 * 1024 * 1024;
+
+/** The .leaf size limit for this device. */
+export function maxLeafBytes(): number {
+  const touch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+  return touch ? MAX_LEAF_BYTES_TOUCH : MAX_LEAF_BYTES;
+}
+
+/** Null when the file can be opened on this device, else a plain message saying why not. */
+export function leafTooLarge(size: number, max = maxLeafBytes()): string | null {
+  if (size <= max) return null;
+  const mb = (n: number) => Math.round(n / 1024 / 1024);
+  return max < MAX_LEAF_BYTES
+    ? `This file is ${mb(size)} MB. On this device Looseleaf opens .leaf files up to ${mb(max)} MB; open it on a computer (up to ${mb(MAX_LEAF_BYTES)} MB) instead.`
+    : `This file is ${mb(size)} MB. Looseleaf opens .leaf files up to ${mb(max)} MB.`;
+}
 
 /**
  * Parses a .leaf file and stores its background images under fresh refs (so a file can never
