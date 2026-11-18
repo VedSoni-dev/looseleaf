@@ -23,6 +23,7 @@ const SYSTEM = [
   "The page may be an imported PDF page or lecture slide with the user's handwriting and highlights on top of it: use both, and tell the printed content apart from their notes when it matters.",
   "Answer directly and briefly. Use plain text with light Markdown only: short headings, bullet lists, **bold**.",
   "Never use LaTeX. Write maths with ordinary characters and Unicode (x², √, ÷, ≤, π).",
+  "Never draw boxes, frames or tables out of characters (no │ ─ ┌ or ASCII art): show a boxed or circled answer as **bold** on its own line.",
   "If the handwriting is unreadable or the image is blank, say so plainly instead of guessing.",
 ].join(" ");
 
