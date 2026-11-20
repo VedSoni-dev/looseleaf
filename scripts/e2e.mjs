@@ -18,7 +18,8 @@ const browser = await (process.env.BROWSER === "webkit" ? webkit : chromium).lau
 
 /** A fresh browser profile with the gate answered "ready" and /api/ai recorded and answered. */
 async function session() {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // Service workers are blocked so every request passes through the stubs below (matters against a deployed build).
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
   const asked = [];
   const errors = [];
   await context.route("**/api/publik/status", (r) =>
