@@ -178,7 +178,8 @@ const AIPanel = forwardRef<AIPanelHandle, { open: boolean; engine: RefObject<Ink
       const text = draft.trim();
       if (!text || busy || sending.current) return;
       setDraft("");
-      if (msgs.length === 0) void begin(text, text, "page");
+      // A typed first question is about what is circled, when something is; otherwise the page in view.
+      if (msgs.length === 0) void begin(text, text, engine.current?.hasSelection() ? "selection" : "page");
       else submit([...msgs, { role: "user", text }]);
     };
 

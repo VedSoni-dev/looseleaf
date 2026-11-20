@@ -219,11 +219,14 @@ export default function Library() {
     <main
       className="chrome min-h-full bg-desk"
       onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
         setDragging(true);
       }}
       onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragging(false);
+        // Leaving for another element inside the page is not leaving; leaving the window has no relatedTarget.
+        const to = e.relatedTarget as Node | null;
+        if (!to || !e.currentTarget.contains(to)) setDragging(false);
       }}
       onDrop={(e) => {
         e.preventDefault();
