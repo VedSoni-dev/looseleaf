@@ -86,12 +86,48 @@ export async function getNotebook(id: string): Promise<Notebook | null> {
   return (await request(db.transaction(NOTEBOOKS).objectStore(NOTEBOOKS).get(id) as IDBRequest<Notebook>)) ?? null;
 }
 
-export async function saveNotebook(nb: Notebook, thumb?: string): Promise<void> {
+/** The notebook's last-saved time in this browser, or null when it is not stored. Cheap: reads no pages. */
+export async function notebookStamp(id: string): Promise<number | null> {
+  const db = await open();
+  const meta = await request(db.transaction(META).objectStore(META).get(id) as IDBRequest<NotebookMeta | undefined>);
+  return meta?.updatedAt ?? null;
+}
+
+/**
+ * Passed by an open editor so two tabs on one notebook never silently overwrite each other.
+ * `knownAt` is the updatedAt this tab last loaded or saved. If the stored notebook is newer than
+ * that, another tab wrote it: its version is first kept as a separate notebook under `copyId`
+ * (one per editor session, so repeated saves refresh that one copy instead of piling up).
+ */
+export interface SaveGuard {
+  knownAt: number;
+  copyId: string;
+}
+
+/** Returns true when another tab's newer version was found and kept as a copy (see SaveGuard). */
+export async function saveNotebook(nb: Notebook, thumb?: string, guard?: SaveGuard): Promise<boolean> {
   const db = await open();
   const tx = db.transaction([NOTEBOOKS, META], "readwrite");
-  tx.objectStore(NOTEBOOKS).put(nb);
+  const finished = done(tx);
+  const books = tx.objectStore(NOTEBOOKS);
   const metaStore = tx.objectStore(META);
+  // Without a guard the notebook is written before anything is awaited, so a save started as the page
+  // goes away still lands.
+  if (!guard) books.put(nb);
   const prior = await request(metaStore.get(nb.id) as IDBRequest<NotebookMeta | undefined>);
+  let kept = false;
+  if (guard) {
+    if (prior && prior.updatedAt > guard.knownAt) {
+      const other = await request(books.get(nb.id) as IDBRequest<Notebook | undefined>);
+      if (other) {
+        const title = `Other tab's copy: ${other.title}`;
+        books.put({ ...other, id: guard.copyId, title });
+        metaStore.put({ ...prior, id: guard.copyId, title, pageCount: other.pages.length } satisfies NotebookMeta);
+        kept = true;
+      }
+    }
+    books.put(nb);
+  }
   metaStore.put({
     id: nb.id,
     title: nb.title,
@@ -100,7 +136,8 @@ export async function saveNotebook(nb: Notebook, thumb?: string): Promise<void> 
     pageCount: nb.pages.length,
     thumb: thumb ?? prior?.thumb,
   } satisfies NotebookMeta);
-  await done(tx);
+  await finished;
+  return kept;
 }
 
 export async function deleteNotebook(id: string): Promise<void> {

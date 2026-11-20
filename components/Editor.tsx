@@ -30,10 +30,10 @@ import ImportProgress, { type ImportState } from "./ImportProgress";
 import { backgroundImage } from "@/lib/backgrounds";
 import { InkEngine, type EngineState, type TextEdit } from "@/lib/engine";
 import { BG_FAILED, SAVE_MESSAGES, exportLeaf, exportPDF, exportPNG, type SaveResult } from "@/lib/leaf";
-import { MAX_PDF_PAGES, PdfImportError, pdfToPages } from "@/lib/pdf";
+import { MAX_PDF_PAGES, PdfImportError, isPdfFile, pdfToPages } from "@/lib/pdf";
 import { TEXT_FONT, TEXT_LINE, pageToCanvas } from "@/lib/render";
-import { deleteAssets, getNotebook, saveNotebook } from "@/lib/store";
-import { HIGHLIGHT_COLORS, HIGHLIGHT_SIZES, PEN_COLORS, PEN_SIZES, type Notebook, type Page, type Paper, type Tool } from "@/lib/types";
+import { deleteAssets, getNotebook, notebookStamp, saveNotebook } from "@/lib/store";
+import { HIGHLIGHT_COLORS, HIGHLIGHT_SIZES, PEN_COLORS, PEN_SIZES, uid, type Notebook, type Page, type Paper, type Tool } from "@/lib/types";
 
 const TOOLS: { tool: Tool; label: string; key: string; icon: React.ReactNode }[] = [
   { tool: "pen", label: "Pen", key: "P", icon: <PenLine size={20} /> },
@@ -81,6 +81,12 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const draft = useRef("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thumbPage = useRef<Page | null>(null);
+  // Two tabs on one notebook: the updatedAt this tab last loaded or saved, and where the other
+  // tab's version goes if both write (lib/store.ts, SaveGuard).
+  const knownAt = useRef(0);
+  const [copyId] = useState(uid);
+  const warned = useRef(false);
+  const syncing = useRef(false);
 
   const [status, setStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [es, setEs] = useState<EngineState | null>(null);
@@ -98,7 +104,8 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const pdfInput = useRef<HTMLInputElement>(null);
   const importAbort = useRef<AbortController | null>(null);
 
-  const flush = useCallback(async (commitText = false): Promise<boolean> => {
+  /** `leaving`: the page is going away, so write at once without first checking for another tab's save. */
+  const flush = useCallback(async (commitText = false, leaving = false): Promise<boolean> => {
     // When leaving, text still being typed is part of the notebook: commit it before saving.
     if (commitText && editRef.current) engineRef.current?.finishTextEdit(draft.current);
     const doc = docRef.current;
@@ -113,14 +120,44 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
       thumbPage.current = first;
       thumb = pageToCanvas(first, 0.3).toDataURL("image/jpeg", 0.72);
     }
+    const before = knownAt.current;
+    knownAt.current = Math.max(before, doc.updatedAt); // now, so the next save does not mistake this one for another tab's
     try {
-      await saveNotebook(doc, thumb);
+      const kept = await saveNotebook(doc, thumb, leaving ? undefined : { knownAt: before, copyId });
+      if (kept && !warned.current) {
+        warned.current = true;
+        setToast("Open in another tab too. That tab's version is kept as a copy.");
+      }
       if (!dirty.current) setSaveState("saved");
       return true;
     } catch {
       dirty.current = true;
       setSaveState("error");
       return false;
+    }
+  }, [copyId]);
+
+  /** Coming back to this tab: if another tab saved the notebook meanwhile, show that instead of a stale page. */
+  const sync = useCallback(async () => {
+    const engine = engineRef.current;
+    const doc = docRef.current;
+    if (!engine || !doc || dirty.current || editRef.current || syncing.current) return;
+    syncing.current = true;
+    try {
+      const stamp = await notebookStamp(doc.id);
+      if (stamp === null || stamp <= knownAt.current) return;
+      const next = await getNotebook(doc.id);
+      if (!next || dirty.current || editRef.current || engineRef.current !== engine) return;
+      docRef.current = next;
+      knownAt.current = next.updatedAt;
+      thumbPage.current = next.pages[0];
+      engine.replaceDoc(next);
+      if (document.activeElement?.getAttribute("aria-label") !== "Notebook title") setTitle(next.title);
+      setToast("Updated with changes from another tab.");
+    } catch {
+      // Storage hiccup: the save guard still protects the other tab's work.
+    } finally {
+      syncing.current = false;
     }
   }, []);
 
@@ -133,6 +170,7 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
         if (cancelled) return;
         if (!doc) return setStatus("missing");
         docRef.current = doc;
+        knownAt.current = doc.updatedAt;
         thumbPage.current = doc.pages[0];
         setTitle(doc.title);
         engine = new InkEngine(baseRef.current!, overlayRef.current!, doc, {
@@ -164,25 +202,31 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
       .catch(() => !cancelled && setStatus("error"));
 
     const onHide = () => {
-      if (document.visibilityState === "hidden") flush(true);
+      if (document.visibilityState === "hidden") flush(true, true);
+      else void sync();
     };
+    const onShow = () => void sync();
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const onScheme = () => engineRef.current?.readTheme();
     document.addEventListener("visibilitychange", onHide);
-    const onPageHide = () => void flush(true);
+    const onPageHide = () => void flush(true, true);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("focus", onShow);
+    window.addEventListener("pageshow", onShow);
     scheme.addEventListener("change", onScheme);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("focus", onShow);
+      window.removeEventListener("pageshow", onShow);
       scheme.removeEventListener("change", onScheme);
       importAbort.current?.abort();
       flush(true);
       engine?.destroy();
       engineRef.current = null;
     };
-  }, [id, flush]);
+  }, [id, flush, sync]);
 
   useEffect(() => {
     if (!toast) return;
@@ -321,7 +365,20 @@ export default function Editor({ id, onExit }: { id: string; onExit: () => void 
   const iconBtn = "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink hover:bg-panel-2 disabled:opacity-30 disabled:hover:bg-transparent";
 
   return (
-    <div className="chrome fixed inset-0 overflow-hidden bg-desk">
+    <div
+      className="chrome fixed inset-0 overflow-hidden bg-desk"
+      // Without these the browser opens a dropped file in place of the notebook.
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        const file = Array.from(e.dataTransfer.files).find(isPdfFile);
+        if (file) void insertPdf(file);
+        else setToast("Drop a PDF to add its pages here.");
+      }}
+    >
       <canvas ref={baseRef} className="absolute inset-0 h-full w-full" />
       <canvas
         ref={overlayRef}

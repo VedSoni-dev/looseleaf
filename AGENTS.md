@@ -19,3 +19,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Never print or log a key
 - Docs: https://publikhq.com/llms.txt, https://publikhq.com/developers, https://publikhq.com/skills/api.md
 - Looseleaf: the AI route is `app/api/ai` (streams; picks the key with `resolveProvider()`, own key exactly as before when "My own key" is chosen). `<PublikChoice />` sits in the AI panel's settings (key icon, `components/AIPanel.tsx`)
+- Browser checks: `npm run dev -- -p 4477`, then `npm run e2e` (Chromium; `BROWSER=webkit` for Safari's engine). The publik gate and `/api/ai` are stubbed, so it sends publik nothing and costs nothing. Add a check there for every bug fixed in the editor.

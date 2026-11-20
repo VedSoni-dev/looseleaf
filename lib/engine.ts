@@ -235,7 +235,24 @@ export class InkEngine {
     this.renderAll();
   }
 
+  /**
+   * Swaps in a newer copy of this notebook (another tab saved it). History does not carry over:
+   * its steps belong to the old pages.
+   */
+  replaceDoc(doc: Notebook) {
+    this.cancelAction();
+    this.selection = null;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.caches.clear();
+    this.doc = doc;
+    this.clampView();
+    this.renderAll();
+    this.emit();
+  }
+
   undo() {
+    this.cancelAction(); // a stroke in flight may be on a page this step removes
     const prev = this.undoStack.pop();
     if (!prev) return;
     this.redoStack.push(this.doc.pages);
@@ -243,6 +260,7 @@ export class InkEngine {
   }
 
   redo() {
+    this.cancelAction();
     const next = this.redoStack.pop();
     if (!next) return;
     this.undoStack.push(this.doc.pages);
@@ -252,6 +270,7 @@ export class InkEngine {
   /** Adds pages (e.g. from a PDF) after the current one and scrolls to the first of them. */
   insertPages(added: Page[]) {
     if (!added.length) return;
+    this.cancelAction();
     const at = Math.min(this.pageIndex, this.doc.pages.length - 1);
     this.selection = null;
     const pages = this.doc.pages.slice();
@@ -261,6 +280,7 @@ export class InkEngine {
   }
 
   addPage() {
+    this.cancelAction();
     const at = Math.min(this.pageIndex, this.doc.pages.length - 1);
     this.selection = null;
     const pages = this.doc.pages.slice();
@@ -270,6 +290,7 @@ export class InkEngine {
   }
 
   deletePage() {
+    this.cancelAction();
     const at = this.pageIndex;
     this.clearSelection();
     if (this.doc.pages.length === 1) {
@@ -357,6 +378,10 @@ export class InkEngine {
   currentPageIsEmpty(): boolean {
     const page = this.doc.pages[this.pageIndex];
     return !page || (page.items.length === 0 && !page.bg);
+  }
+
+  hasSelection(): boolean {
+    return !!this.selection && this.selectedItems().length > 0;
   }
 
   /** Drops typed text onto the page: under the selection if there is one, else near the top of the view. */
