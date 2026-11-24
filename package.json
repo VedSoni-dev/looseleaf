@@ -1,6 +1,6 @@
 {
   "name": "looseleaf",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "scripts": {
     "predev": "node scripts/copy-pdfjs-assets.mjs",
@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --test scripts/test-origin.mjs",
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {

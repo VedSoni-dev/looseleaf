@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { MODELS, resolveProvider, topUpUrlFrom402 } from "@/lib/publik";
 import { clientKey, takeToken } from "@/lib/ratelimit";
+import { forbidden, foreignOrigin } from "@/lib/origin";
 
 export const maxDuration = 60;
 
@@ -37,6 +38,7 @@ function fail(status: number, message: string, extra: Record<string, unknown> = 
 }
 
 export async function POST(request: Request) {
+  if (foreignOrigin(request)) return forbidden(); // before the rate limit, so another site can't use up this visitor's tokens
   const wait = takeToken(clientKey(request.headers));
   if (wait !== null) {
     return Response.json(

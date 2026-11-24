@@ -1,8 +1,10 @@
 import { cookies } from "next/headers";
 import { setChoice, type Choice } from "@/lib/publik";
+import { forbidden, foreignOrigin } from "@/lib/origin";
 
 /** setChoice() for this browser: { choice: "publik" | "own_key" | null }. null asks again at the next gate. */
 export async function POST(req: Request) {
+  if (foreignOrigin(req)) return forbidden();
   const body = (await req.json().catch(() => ({}))) as { choice?: unknown };
   const choice = body.choice === "publik" || body.choice === "own_key" ? (body.choice as Choice) : body.choice === null ? null : undefined;
   if (choice === undefined) return Response.json({ error: { message: "choice must be publik, own_key or null." } }, { status: 400 });
