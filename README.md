@@ -69,11 +69,15 @@ npm run dev
 
 Then open http://localhost:3000 for the landing page, or http://localhost:3000/app for the app. For a production build: `npm run build && npm start`.
 
+Checks: `npm test` (the same-origin check) and `npm run e2e` against `npm run dev -- -p 4477` (28 browser checks, including other sites getting 403; the gate and the AI are stubbed, so they cost nothing; `BROWSER=webkit` for Safari's engine).
+
 ## Sign in and privacy
 
 The landing page at `/` is public. The app at `/app` opens with **Sign in with publik**, before its first screen. Your notebooks still live only in your browser; signing in does not upload them anywhere. Notebooks made before 0.1.4, when the app was at `/`, are still there (same site, same browser storage), and old `/#/n/…` notebook links and older Home Screen installs are sent on to `/app`.
 
 To count its users, Looseleaf sends publik two events and nothing else: `app_opened` (once per browser session) and `active_session` (every 30 minutes while a tab is open). Each one carries the app's name and version, your operating system and a random ID for this browser, sent with this browser's publik key. No notes, pages, questions or answers. Browsers with Do Not Track or Global Privacy Control turned on are never counted.
+
+Other sites can't use your sign-in: every POST and DELETE route answers 403 to a request from another site, another subdomain or Origin `null`, so a form elsewhere can't sign you out, mint a stray install or switch you to your own key.
 
 ## AI
 

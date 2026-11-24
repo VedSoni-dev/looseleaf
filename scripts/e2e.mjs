@@ -99,6 +99,7 @@ const jpegSize = (page, dataUrl) =>
   check("undo is saved", itemCount(nb) === 1);
   await page.reload();
   await page.getByRole("button", { name: "Pen (P)" }).waitFor();
+  await page.getByText("1 / 1").waitFor({ timeout: 5_000 }).catch(() => {}); // the counter can paint a moment after the toolbar
   check("page count shows after reload", (await page.getByText("1 / 1").count()) === 1);
   check("no console errors (draw, undo, reload)", s.errors.length === 0, s.errors.join(" | "));
   await s.context.close();
@@ -265,6 +266,58 @@ const jpegSize = (page, dataUrl) =>
   check("library: the drop overlay goes away when the drag leaves the window", stuck.shown && !stuck.after, JSON.stringify(stuck));
   check("library: no console errors", s.errors.length === 0, s.errors.join(" | "));
   await s.context.close();
+}
+
+// Other sites (ported from Linework). Every request here is refused before it reaches publik, so even a dev
+// server with the real app token sends nothing to publik. The cookies are placeholders this browser "already has".
+try {
+  const askBody = JSON.stringify({ messages: [{ role: "user", text: "hi" }] });
+  const anon = await fetch(`${BASE}/api/ai`, { method: "POST", headers: { "content-type": "application/json" }, body: askBody });
+  check("a stranger with no publik cookie still gets the old answer, not 403", anon.status === 401, String(anon.status));
+  const xpost = (path, headers, body = "{}") => fetch(BASE + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body });
+  const xs = [
+    (await xpost("/api/ai", { origin: "null" }, askBody)).status,
+    (await xpost("/api/ai", { origin: "https://other.vercel.app", "sec-fetch-site": "same-site" }, askBody)).status,
+    (await xpost("/api/ai", { "sec-fetch-site": "cross-site" }, askBody)).status,
+    (await xpost("/api/publik/provision", { origin: "https://evil.example" })).status,
+    (await xpost("/api/publik/choice", { origin: "https://evil.example" }, '{"choice":"own_key"}')).status,
+    (await xpost("/api/publik/telemetry", { origin: "null" }, '{"event":"app_opened"}')).status,
+    (await fetch(`${BASE}/api/publik/provision`, { method: "DELETE", headers: { origin: "https://evil.example" } })).status,
+  ];
+  check("Origin null, another subdomain, Sec-Fetch-Site cross-site, and another site on every POST/DELETE route: 403", xs.every((x) => x === 403), xs.join(" "));
+
+  const context = await browser.newContext();
+  const host = new URL(BASE).hostname;
+  await context.addCookies([
+    { name: "looseleaf-publik", value: "placeholder-install", domain: host, path: "/", httpOnly: true, sameSite: "Lax" },
+    { name: "looseleaf-publik-choice", value: "publik", domain: host, path: "/", httpOnly: true, sameSite: "Lax" },
+  ]);
+  await context.route("http://evil.test/**", (r) => r.fulfill({ contentType: "text/html", body: r.request().url().endsWith("/a")
+    ? `<form id=f method=post action="${BASE}/api/publik/provision"></form><script>f.submit()</script>`
+    : `<form id=f method=post enctype="text/plain" action="${BASE}/api/publik/choice"><input name='{"choice":"own_key","x":"' value='"}'></form><script>f.submit()</script>` }));
+  const evil = await context.newPage();
+  const seen = [];
+  evil.on("response", (r) => { if (r.url().startsWith(BASE)) seen.push(r.status()); });
+  for (const u of ["http://evil.test/a", "http://evil.test/b"]) {
+    await evil.goto(u);
+    await evil.waitForURL((x) => x.toString().startsWith(BASE), { timeout: 10_000 }).catch(() => {});
+    await evil.waitForTimeout(300);
+  }
+  check("a real form on another site gets 403 from provision and choice", seen.length === 2 && seen.every((s) => s === 403), seen.join(" "));
+  const jar = Object.fromEntries((await context.cookies(BASE)).map((c) => [c.name, c.value]));
+  check("a form on another site can't replace this browser's install or switch it to My own key", jar["looseleaf-publik"] === "placeholder-install" && jar["looseleaf-publik-choice"] === "publik", JSON.stringify(jar));
+  // Looseleaf itself still reaches its routes from the same browser (same origin passes the check).
+  const page = await context.newPage();
+  await page.goto(`${BASE}/`);
+  const same = await page.evaluate(async () => {
+    const choice = await fetch("/api/publik/choice", { method: "POST", headers: { "content-type": "application/json" }, body: '{"choice":"publik"}' });
+    const ai = await fetch("/api/ai", { method: "POST", headers: { "content-type": "application/json" }, body: '{"messages":[{"role":"user","text":"hi"}]}' });
+    return [choice.status, ai.status];
+  });
+  check("from Looseleaf itself the same routes pass the check (choice 200; AI 401 needs_key for a placeholder install, not 403)", same[0] === 200 && same[1] === 401, same.join(" "));
+  await context.close();
+} catch (e) {
+  check("other sites: ran to the end", false, String(e.message).split("\n")[0]);
 }
 
 await browser.close();

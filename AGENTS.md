@@ -17,6 +17,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Self-test: `npm run build && PUBLIK_SELF_TEST=1 npm run start` prints `publik self-test: ok <slug> <version>` (instrumentation.ts)
 - 402: show error.message plus error.top_up_url only
 - Never print or log a key
+- Every POST/DELETE route starts with `if (foreignOrigin(req)) return forbidden();` (`lib/origin.ts`): another site, another subdomain, or Origin "null" gets 403. Keep it on any new route that spends credit or changes the cookies
 - Docs: https://publikhq.com/llms.txt, https://publikhq.com/developers, https://publikhq.com/skills/api.md
 - Looseleaf: the AI route is `app/api/ai` (streams; picks the key with `resolveProvider()`, own key exactly as before when "My own key" is chosen). `<PublikChoice />` sits in the AI panel's settings (key icon, `components/AIPanel.tsx`)
 - Browser checks: `npm run dev -- -p 4477`, then `npm run e2e` (Chromium; `BROWSER=webkit` for Safari's engine). The publik gate and `/api/ai` are stubbed, so it sends publik nothing and costs nothing. Add a check there for every bug fixed in the editor.
